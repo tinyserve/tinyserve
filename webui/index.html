@@ -1,0 +1,301 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>tinyserve dashboard</title>
+  <style>
+    :root {
+      --bg: #0f172a;
+      --panel: #111827;
+      --accent: #7c3aed;
+      --muted: #94a3b8;
+      --text: #e2e8f0;
+      --card: linear-gradient(135deg, rgba(124,58,237,0.12), rgba(14,165,233,0.08));
+      --border: rgba(255,255,255,0.06);
+      --success: #22c55e;
+      --warning: #f59e0b;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "SF Pro Display", "Inter", "Helvetica Neue", sans-serif;
+      background: radial-gradient(circle at 20% 20%, rgba(124,58,237,0.12), transparent 25%),
+                  radial-gradient(circle at 80% 0%, rgba(14,165,233,0.18), transparent 30%),
+                  var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+    }
+    .page {
+      max-width: 1100px;
+      margin: 0 auto;
+      padding: 32px 24px 56px;
+    }
+    header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 18px 22px;
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      background: linear-gradient(120deg, rgba(255,255,255,0.04), rgba(255,255,255,0.02));
+      box-shadow: 0 24px 60px rgba(0,0,0,0.25);
+    }
+    .title {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .title h1 {
+      margin: 0;
+      font-size: 26px;
+      letter-spacing: -0.02em;
+    }
+    .title p {
+      margin: 0;
+      color: var(--muted);
+    }
+    .actions {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+    }
+    button {
+      cursor: pointer;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 10px 14px;
+      background: var(--accent);
+      color: #f8fafc;
+      font-weight: 600;
+      letter-spacing: -0.01em;
+      box-shadow: 0 10px 32px rgba(124,58,237,0.35);
+      transition: transform 120ms ease, box-shadow 120ms ease;
+    }
+    button:active { transform: translateY(1px); box-shadow: 0 6px 20px rgba(124,58,237,0.25); }
+    .section {
+      margin-top: 24px;
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      background: var(--card);
+      padding: 18px 18px 12px;
+      box-shadow: 0 22px 50px rgba(0,0,0,0.2);
+    }
+    .section h2 {
+      margin: 4px 0 12px;
+      font-size: 18px;
+      letter-spacing: -0.01em;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+      gap: 12px;
+    }
+    .card {
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      background: rgba(17,24,39,0.7);
+      padding: 12px 14px;
+    }
+    .metric {
+      font-size: 28px;
+      font-weight: 700;
+    }
+    .metric.ok { color: var(--success); }
+    .metric.warn { color: var(--warning); }
+    .label {
+      color: var(--muted);
+      font-size: 13px;
+      margin-top: 2px;
+    }
+    .muted { color: var(--muted); }
+    .badge {
+      display: inline-block;
+      padding: 4px 10px;
+      border-radius: 999px;
+      font-weight: 600;
+      font-size: 12px;
+      border: 1px solid var(--border);
+      background: rgba(255,255,255,0.06);
+    }
+    .badge.ok { color: var(--success); border-color: rgba(34,197,94,0.5); }
+    .badge.warn { color: var(--warning); border-color: rgba(245,158,11,0.5); }
+    .services {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 12px;
+      margin-top: 6px;
+    }
+    .service {
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      background: rgba(17,24,39,0.8);
+      padding: 14px;
+    }
+    .service h3 {
+      margin: 0 0 6px;
+      font-size: 17px;
+      letter-spacing: -0.01em;
+    }
+    .pill-row { display: flex; gap: 8px; flex-wrap: wrap; }
+    .inline-muted { color: var(--muted); font-size: 13px; }
+    .empty {
+      text-align: center;
+      color: var(--muted);
+      padding: 24px 12px;
+    }
+    .error {
+      margin-top: 12px;
+      padding: 10px 12px;
+      border-radius: 12px;
+      border: 1px solid rgba(248,113,113,0.5);
+      background: rgba(248,113,113,0.08);
+      color: #fecdd3;
+      display: none;
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <header>
+      <div class="title">
+        <h1>tinyserve</h1>
+        <p>Local Mac mini host — Traefik + cloudflared front door</p>
+      </div>
+      <div class="actions">
+        <button id="refresh">Refresh</button>
+      </div>
+    </header>
+
+    <div class="section">
+      <h2>Daemon status</h2>
+      <div class="grid">
+        <div class="card">
+          <div class="metric" id="status-text">—</div>
+          <div class="label">Status</div>
+        </div>
+        <div class="card">
+          <div class="metric" id="service-count">0</div>
+          <div class="label">Services tracked</div>
+        </div>
+        <div class="card">
+          <div class="metric" id="updated-at">—</div>
+          <div class="label">Last state update</div>
+        </div>
+        <div class="card">
+          <div class="metric" id="proxy-status">—</div>
+          <div class="label">Traefik</div>
+          <div class="inline-muted" id="proxy-health">—</div>
+        </div>
+        <div class="card">
+          <div class="metric" id="tunnel-status">—</div>
+          <div class="label">cloudflared</div>
+          <div class="inline-muted" id="tunnel-health">—</div>
+        </div>
+      </div>
+      <div class="error" id="status-error"></div>
+    </div>
+
+    <div class="section">
+      <h2>Services</h2>
+      <div id="services" class="services"></div>
+      <div class="error" id="services-error"></div>
+    </div>
+  </div>
+
+  <script>
+    const statusText = document.getElementById("status-text");
+    const serviceCount = document.getElementById("service-count");
+    const updatedAt = document.getElementById("updated-at");
+    const servicesContainer = document.getElementById("services");
+    const statusError = document.getElementById("status-error");
+    const servicesError = document.getElementById("services-error");
+    const proxyStatus = document.getElementById("proxy-status");
+    const proxyHealth = document.getElementById("proxy-health");
+    const tunnelStatus = document.getElementById("tunnel-status");
+    const tunnelHealth = document.getElementById("tunnel-health");
+
+    async function fetchJSON(path) {
+      const res = await fetch(path, { cache: "no-store" });
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(text || res.statusText);
+      }
+      return res.json();
+    }
+
+    function renderStatus(data) {
+      statusText.textContent = data.status || "unknown";
+      statusText.className = data.status === "ok" ? "metric ok" : "metric warn";
+      serviceCount.textContent = data.service_count ?? 0;
+      updatedAt.textContent = data.updated_at ? new Date(data.updated_at).toLocaleString() : "—";
+      const proxy = data.proxy || {};
+      proxyStatus.textContent = proxy.state || "unknown";
+      proxyStatus.className = isHealthy(proxy) ? "metric ok" : "metric warn";
+      proxyHealth.textContent = proxy.health || "";
+
+      const tunnel = data.tunnel || {};
+      tunnelStatus.textContent = tunnel.state || "unknown";
+      tunnelStatus.className = isHealthy(tunnel) ? "metric ok" : "metric warn";
+      tunnelHealth.textContent = tunnel.health || "";
+    }
+
+    function renderServices(list) {
+      servicesContainer.innerHTML = "";
+      if (!list || list.length === 0) {
+        servicesContainer.innerHTML = '<div class="empty">No services yet. Add one from the CLI or upcoming UI.</div>';
+        return;
+      }
+
+      for (const svc of list) {
+        const hosts = (svc.hostnames || []).map(h => `<span class="badge">${h}</span>`).join(" ");
+        const statusClass = svc.status === "healthy" ? "badge ok" : "badge warn";
+        const serviceEl = document.createElement("div");
+        serviceEl.className = "service";
+        serviceEl.innerHTML = `
+          <h3>${svc.name || "unnamed"}</h3>
+          <div class="pill-row" style="margin-bottom:6px;">
+            <span class="${statusClass}">${svc.status || "pending"}</span>
+            <span class="badge">${svc.type || "registry-image"}</span>
+            ${svc.enabled ? '<span class="badge">enabled</span>' : '<span class="badge warn">disabled</span>'}
+          </div>
+          <div class="inline-muted">Image: ${svc.image || "—"}</div>
+          <div class="inline-muted">Port: ${svc.internal_port || "—"}</div>
+          <div class="inline-muted">Hosts: ${hosts || "—"}</div>
+        `;
+        servicesContainer.appendChild(serviceEl);
+      }
+    }
+
+    async function loadDashboard() {
+      statusError.style.display = "none";
+      servicesError.style.display = "none";
+      try {
+        const status = await fetchJSON("/status");
+        renderStatus(status);
+      } catch (err) {
+        statusError.textContent = `Status error: ${err.message}`;
+        statusError.style.display = "block";
+      }
+
+      try {
+        const services = await fetchJSON("/services");
+        renderServices(services);
+      } catch (err) {
+        servicesError.textContent = `Services error: ${err.message}`;
+        servicesError.style.display = "block";
+      }
+    }
+
+    document.getElementById("refresh").addEventListener("click", loadDashboard);
+    document.addEventListener("DOMContentLoaded", loadDashboard);
+
+    function isHealthy(entry) {
+      if (!entry || !entry.state) return false;
+      if (entry.health && entry.health.toLowerCase() !== "healthy") return false;
+      return entry.state.toLowerCase() === "running" || entry.state.toLowerCase() === "healthy";
+    }
+  </script>
+</body>
+</html>
