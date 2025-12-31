@@ -20,9 +20,10 @@ Notes:
 - Keep `docker` CLI installed (`brew install docker`) even when using Colima/Rancher; it talks to the socket they expose.
 
 ## 3) Install tinyserve (brew)
-- `brew tap <your-tap>/tinyserve` (placeholder tap)
-- `brew install tinyserve`
+- If tinyserve is in Homebrew core: `brew install tinyserve`
+- If using a tap: `brew tap tinyserve/tinyserve` then `brew install tinyserve`
 - Ensure Homebrew’s `bin` is on `PATH` (e.g., `/opt/homebrew/bin` or `/usr/local/bin`).
+- Verify: `tinyserve --help`
 
 ## 4) Tinyserve data root
 - Create the data root:

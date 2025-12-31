@@ -1,6 +1,11 @@
 # Getting Started (ideal flow)
 
-This assumes you installed tinyserve via Homebrew, have a Docker runtime running (Colima/Rancher/Lima), and want tinyserve to create/manage the Cloudflare Tunnel automatically.
+This assumes you want to install tinyserve via Homebrew, have a Docker runtime running (Colima/Rancher/Lima), and want tinyserve to create/manage the Cloudflare Tunnel automatically.
+
+## 0) Install tinyserve (Homebrew)
+- If tinyserve is in Homebrew core: `brew install tinyserve`
+- If using a tap: `brew tap tinyserve/tinyserve` then `brew install tinyserve`
+- Verify: `tinyserve --help`
 
 ## 1) Launch the daemon
 - If not already running via LaunchAgent, start it once in the foreground for a quick check:
