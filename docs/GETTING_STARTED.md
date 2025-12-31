@@ -27,6 +27,14 @@ This assumes you want to install tinyserve via Homebrew, have a Docker runtime r
   - Set `default_domain` and wire the tunnel to Traefik.
   - Verify Docker + compose availability.
 
+## 2b) Optional: custom domain via reverse proxy + port forward (no Cloudflare Tunnel)
+If you don’t want Cloudflare Tunnel, you can expose tinyserve directly:
+- Point DNS A/AAAA records at your public IP.
+- Forward ports 80/443 on your router to this Mac mini.
+- Allow inbound 80/443 on your firewall.
+- Use a reverse proxy (Traefik/Caddy/Nginx) to terminate TLS with Let’s Encrypt.
+- Use Dynamic DNS if your public IP changes.
+
 ## 3) Add a service
 - Use the CLI to register your first app (see `docs/ADD_NEW_SERVICE.md` for details):
   ```

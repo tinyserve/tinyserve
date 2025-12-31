@@ -16,6 +16,7 @@
 - [ ] CLI: add deploy status tracking, follow logs (`--follow`), and error hints when daemon is not running.
 - [ ] Web UI: add forms for add/deploy/rollback, live logs view, and proxy/tunnel/service health indicators with better empty/error states.
 - [ ] Launchd/docs: include install/run instructions with plist path updates (binary location), add recovery notes for rollback and compose path.
+- [ ] Docs: add full reverse-proxy + port-forward + firewall setup walkthrough for custom domains (non-Cloudflare Tunnel path).
 - [ ] Deployment workflow: document GitHub Actions → registry → pull flow, tag conventions, and registry auth expectations.
 - [ ] Observability: structured daemon logs, log file rotation under `~/Library/Application Support/tinyserve/logs/`.
 - [x] Testing: unit tests for state (76%), generate (93%), and API handlers (30%). Covers service management, hostname validation, backup pruning, compose generation.

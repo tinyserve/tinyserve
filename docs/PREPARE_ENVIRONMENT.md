@@ -43,6 +43,14 @@ Notes:
 - Tunnel creation and hostname wiring will be automated by tinyserve (see `docs/GETTING_STARTED.md`).
 - Keep your Cloudflare API token or tunnel token handy for that step.
 
+## 6b) Optional: custom domain via reverse proxy + port forward (no Cloudflare Tunnel)
+If you prefer to expose tinyserve directly to the internet with your own domain:
+- **DNS**: point your domain (and any subdomains) to your public IP (A/AAAA records).
+- **Router**: forward TCP ports **80** and **443** to this Mac mini.
+- **Firewall**: allow inbound 80/443 (macOS Application Firewall or your edge firewall).
+- **TLS**: run a reverse proxy with automatic certs (Traefik/Caddy/Nginx+Let’s Encrypt).
+- **Dynamic IP**: if your ISP IP changes, use Dynamic DNS and keep DNS updated.
+
 ## 7) Firewall & remote access (headless-ready)
 - macOS Application Firewall: leave it on; tinyserve binds to `127.0.0.1` only. No pf tweaks needed.
 - Enable remote access before going headless:
