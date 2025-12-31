@@ -6,7 +6,10 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
 	"path/filepath"
+	"syscall"
+	"time"
 
 	"tinyserve/internal/api"
 	"tinyserve/internal/state"
@@ -20,7 +23,9 @@ func main() {
 }
 
 func run() error {
-	ctx := context.Background()
+	// Set up signal handling for graceful shutdown
+	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer cancel()
 
 	dataDir, err := ensureDataDir()
 	if err != nil {
@@ -38,8 +43,9 @@ func run() error {
 
 	generatedRoot := filepath.Join(dataDir, "generated")
 	backupsDir := filepath.Join(dataDir, "backups")
+	cloudflaredDir := filepath.Join(dataDir, "cloudflared")
 
-	handler := api.NewHandler(store, generatedRoot, backupsDir, filepath.Join(dataDir, "state.json"))
+	handler := api.NewHandler(store, generatedRoot, backupsDir, filepath.Join(dataDir, "state.json"), cloudflaredDir)
 	mux := http.NewServeMux()
 	handler.RegisterRoutes(mux)
 	mux.Handle("/", webui.Handler())
@@ -49,12 +55,30 @@ func run() error {
 		Handler: mux,
 	}
 
-	log.Printf("tinyserved listening on %s (state: %s)", server.Addr, filepath.Join(dataDir, "state.json"))
+	// Start server in goroutine
+	errChan := make(chan error, 1)
+	go func() {
+		log.Printf("tinyserved listening on %s (state: %s)", server.Addr, filepath.Join(dataDir, "state.json"))
+		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			errChan <- err
+		}
+		close(errChan)
+	}()
 
-	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+	// Wait for shutdown signal or server error
+	select {
+	case <-ctx.Done():
+		log.Println("shutting down gracefully...")
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer shutdownCancel()
+		if err := server.Shutdown(shutdownCtx); err != nil {
+			return fmt.Errorf("shutdown: %w", err)
+		}
+		log.Println("shutdown complete")
+		return nil
+	case err := <-errChan:
 		return err
 	}
-	return nil
 }
 
 func ensureDataDir() (string, error) {

@@ -7,39 +7,45 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 
+	"tinyserve/internal/cloudflare"
 	"tinyserve/internal/docker"
 	"tinyserve/internal/generate"
 	"tinyserve/internal/state"
 )
 
 type Handler struct {
-	Store         state.Store
-	GeneratedRoot string
-	BackupsDir    string
-	StatePath     string
+	Store          state.Store
+	GeneratedRoot  string
+	BackupsDir     string
+	StatePath      string
+	CloudflaredDir string
 }
 
-func NewHandler(store state.Store, generatedRoot, backupsDir, statePath string) *Handler {
+func NewHandler(store state.Store, generatedRoot, backupsDir, statePath, cloudflaredDir string) *Handler {
 	return &Handler{
-		Store:         store,
-		GeneratedRoot: generatedRoot,
-		BackupsDir:    backupsDir,
-		StatePath:     statePath,
+		Store:          store,
+		GeneratedRoot:  generatedRoot,
+		BackupsDir:     backupsDir,
+		StatePath:      statePath,
+		CloudflaredDir: cloudflaredDir,
 	}
 }
 
 func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/status", h.handleStatus)
 	mux.HandleFunc("/services", h.handleServices)
+	mux.HandleFunc("/services/", h.handleServiceByName) // DELETE /services/{name}
 	mux.HandleFunc("/deploy", h.handleDeploy)
 	mux.HandleFunc("/rollback", h.handleRollback)
 	mux.HandleFunc("/logs", h.handleLogs)
+	mux.HandleFunc("/init", h.handleInit)
 }
 
 func (h *Handler) handleStatus(w http.ResponseWriter, r *http.Request) {
@@ -157,6 +163,15 @@ func (h *Handler) handleAddService(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "service name already exists", http.StatusConflict)
 			return
 		}
+		// Check for hostname collisions
+		for _, existingHost := range existing.Hostnames {
+			for _, newHost := range svc.Hostnames {
+				if strings.EqualFold(existingHost, newHost) {
+					http.Error(w, fmt.Sprintf("hostname %q already used by service %q", newHost, existing.Name), http.StatusConflict)
+					return
+				}
+			}
+		}
 	}
 
 	st.Services = append(st.Services, svc)
@@ -167,8 +182,58 @@ func (h *Handler) handleAddService(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, svc)
 }
 
+func (h *Handler) handleServiceByName(w http.ResponseWriter, r *http.Request) {
+	// Extract service name from path: /services/{name}
+	name := strings.TrimPrefix(r.URL.Path, "/services/")
+	if name == "" {
+		http.Error(w, "service name required", http.StatusBadRequest)
+		return
+	}
+
+	switch r.Method {
+	case http.MethodDelete:
+		h.handleDeleteService(w, r, name)
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func (h *Handler) handleDeleteService(w http.ResponseWriter, r *http.Request, name string) {
+	ctx := r.Context()
+	st, err := h.Store.Load(ctx)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("load state: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	// Find and remove the service
+	found := false
+	var newServices []state.Service
+	for _, svc := range st.Services {
+		if strings.EqualFold(svc.Name, name) {
+			found = true
+			continue // skip this one
+		}
+		newServices = append(newServices, svc)
+	}
+
+	if !found {
+		http.Error(w, fmt.Sprintf("service %q not found", name), http.StatusNotFound)
+		return
+	}
+
+	st.Services = newServices
+	if err := h.Store.Save(ctx, st); err != nil {
+		http.Error(w, fmt.Sprintf("save state: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	writeJSON(w, map[string]any{"status": "removed", "name": name})
+}
+
 type deployRequest struct {
-	Service string `json:"service,omitempty"`
+	Service   string `json:"service,omitempty"`
+	TimeoutMs int    `json:"timeout_ms,omitempty"` // health check timeout in milliseconds, default 60000
 }
 
 func (h *Handler) handleDeploy(w http.ResponseWriter, r *http.Request) {
@@ -180,6 +245,12 @@ func (h *Handler) handleDeploy(w http.ResponseWriter, r *http.Request) {
 	var req deployRequest
 	if r.Body != nil {
 		_ = json.NewDecoder(r.Body).Decode(&req)
+	}
+
+	// Default timeout: 60 seconds
+	timeout := 60 * time.Second
+	if req.TimeoutMs > 0 {
+		timeout = time.Duration(req.TimeoutMs) * time.Millisecond
 	}
 
 	ctx := r.Context()
@@ -206,16 +277,37 @@ func (h *Handler) handleDeploy(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("docker pull: %v", err), http.StatusInternalServerError)
 		return
 	}
-	if _, err := runner.Up(ctx, targets...); err != nil {
-		http.Error(w, fmt.Sprintf("docker up: %v", err), http.StatusInternalServerError)
-		return
-	}
 
+	// Backup current state and config before applying changes
 	ts := time.Now().UTC().Format("20060102-150405")
 	if err := h.backupState(ts); err != nil {
 		http.Error(w, fmt.Sprintf("backup state: %v", err), http.StatusInternalServerError)
 		return
 	}
+	if err := h.backupCurrentConfig(ts); err != nil {
+		http.Error(w, fmt.Sprintf("backup config: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	// Start containers
+	if _, err := runner.Up(ctx, targets...); err != nil {
+		http.Error(w, fmt.Sprintf("docker up: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	// Wait for services to become healthy
+	if err := runner.WaitHealthy(ctx, targets, timeout); err != nil {
+		// Health check failed - rollback to previous config
+		rollbackErr := h.rollbackFromBackup(ctx, ts)
+		if rollbackErr != nil {
+			http.Error(w, fmt.Sprintf("health check failed: %v; rollback also failed: %v", err, rollbackErr), http.StatusInternalServerError)
+			return
+		}
+		http.Error(w, fmt.Sprintf("health check failed, rolled back: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	// Health check passed - promote staging to current
 	if err := h.promote(out.StagingDir, ts); err != nil {
 		http.Error(w, fmt.Sprintf("promote staging: %v", err), http.StatusInternalServerError)
 		return
@@ -232,8 +324,15 @@ func (h *Handler) handleDeploy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Prune old backups
+	maxBackups := st.Settings.MaxBackups
+	if maxBackups == 0 {
+		maxBackups = 10
+	}
+	_ = h.pruneBackups(maxBackups)
+
 	resp := map[string]any{
-		"status": "deploy_started",
+		"status": "deployed",
 		"time":   now.Format(time.RFC3339),
 	}
 	writeJSON(w, resp)
@@ -302,6 +401,135 @@ func (h *Handler) handleLogs(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write([]byte(out))
 }
 
+type initRequest struct {
+	Domain     string `json:"domain"`
+	APIToken   string `json:"api_token"`
+	TunnelName string `json:"tunnel_name"`
+	AccountID  string `json:"account_id,omitempty"`
+}
+
+func (h *Handler) handleInit(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req initRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid JSON", http.StatusBadRequest)
+		return
+	}
+
+	if req.Domain == "" || req.APIToken == "" || req.TunnelName == "" {
+		http.Error(w, "domain, api_token, and tunnel_name are required", http.StatusBadRequest)
+		return
+	}
+
+	ctx := r.Context()
+
+	// Verify Docker is available
+	if err := h.checkDocker(ctx); err != nil {
+		http.Error(w, fmt.Sprintf("docker check failed: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	// Create Cloudflare client
+	cfClient := cloudflare.NewClient(req.APIToken)
+
+	// Get account ID if not provided
+	accountID := req.AccountID
+	if accountID == "" {
+		var err error
+		accountID, err = cfClient.GetAccountID(ctx)
+		if err != nil {
+			http.Error(w, fmt.Sprintf("get account ID: %v", err), http.StatusBadRequest)
+			return
+		}
+	}
+
+	// Check if tunnel already exists
+	existing, err := cfClient.FindTunnel(ctx, accountID, req.TunnelName)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("find tunnel: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	var tunnelID string
+	var creds *cloudflare.TunnelCredentials
+
+	if existing != nil {
+		// Tunnel exists, get its token
+		tunnelID = existing.ID
+	} else {
+		// Create new tunnel
+		tunnel, newCreds, err := cfClient.CreateTunnel(ctx, accountID, req.TunnelName)
+		if err != nil {
+			http.Error(w, fmt.Sprintf("create tunnel: %v", err), http.StatusInternalServerError)
+			return
+		}
+		tunnelID = tunnel.ID
+		creds = newCreds
+	}
+
+	// Get tunnel token for running cloudflared
+	token, err := cfClient.GetTunnelToken(ctx, accountID, tunnelID)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("get tunnel token: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	// Write credentials file if we created a new tunnel
+	credsPath := ""
+	if creds != nil {
+		credsPath = filepath.Join(h.CloudflaredDir, fmt.Sprintf("%s.json", tunnelID))
+		credsData, _ := json.MarshalIndent(creds, "", "  ")
+		if err := os.WriteFile(credsPath, credsData, 0o600); err != nil {
+			http.Error(w, fmt.Sprintf("write credentials: %v", err), http.StatusInternalServerError)
+			return
+		}
+	}
+
+	// Update state
+	st, err := h.Store.Load(ctx)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("load state: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	st.Settings.DefaultDomain = req.Domain
+	st.Settings.Tunnel.Mode = state.TunnelModeToken
+	st.Settings.Tunnel.Token = token
+	st.Settings.Tunnel.TunnelID = tunnelID
+	st.Settings.Tunnel.TunnelName = req.TunnelName
+	st.Settings.Tunnel.AccountID = accountID
+	if credsPath != "" {
+		st.Settings.Tunnel.CredentialsFile = credsPath
+	}
+
+	if err := h.Store.Save(ctx, st); err != nil {
+		http.Error(w, fmt.Sprintf("save state: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	resp := map[string]any{
+		"status":      "initialized",
+		"tunnel_id":   tunnelID,
+		"tunnel_name": req.TunnelName,
+		"domain":      req.Domain,
+		"account_id":  accountID,
+		"created":     existing == nil,
+	}
+	writeJSON(w, resp)
+}
+
+func (h *Handler) checkDocker(ctx context.Context) error {
+	cmd := exec.CommandContext(ctx, "docker", "info")
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("docker not available: %w", err)
+	}
+	return nil
+}
+
 func (h *Handler) promote(stagingDir, timestamp string) error {
 	current := h.currentDir()
 	backup := filepath.Join(h.BackupsDir, "backup-"+timestamp)
@@ -330,6 +558,105 @@ func (h *Handler) backupState(timestamp string) error {
 	}
 	dst := filepath.Join(h.BackupsDir, "state-"+timestamp+".json")
 	return copyFile(h.StatePath, dst)
+}
+
+// backupCurrentConfig copies current config directory to backups (if it exists).
+func (h *Handler) backupCurrentConfig(timestamp string) error {
+	current := h.currentDir()
+	if _, err := os.Stat(current); os.IsNotExist(err) {
+		// No current config to backup
+		return nil
+	}
+	backup := filepath.Join(h.BackupsDir, "backup-"+timestamp)
+	if err := os.MkdirAll(h.BackupsDir, 0o755); err != nil {
+		return err
+	}
+	return copyDir(current, backup)
+}
+
+// rollbackFromBackup restores config from backup and restarts services.
+func (h *Handler) rollbackFromBackup(ctx context.Context, timestamp string) error {
+	backup := filepath.Join(h.BackupsDir, "backup-"+timestamp)
+	if _, err := os.Stat(backup); os.IsNotExist(err) {
+		return fmt.Errorf("backup not found: %s", backup)
+	}
+
+	current := h.currentDir()
+	_ = os.RemoveAll(current)
+	if err := copyDir(backup, current); err != nil {
+		return fmt.Errorf("restore backup: %w", err)
+	}
+
+	runner := docker.NewRunner(current)
+	if _, err := runner.Up(ctx); err != nil {
+		return fmt.Errorf("docker up after rollback: %w", err)
+	}
+	return nil
+}
+
+// copyDir recursively copies a directory tree.
+func copyDir(src, dst string) error {
+	return filepath.Walk(src, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		relPath, err := filepath.Rel(src, path)
+		if err != nil {
+			return err
+		}
+		dstPath := filepath.Join(dst, relPath)
+
+		if info.IsDir() {
+			return os.MkdirAll(dstPath, info.Mode())
+		}
+		return copyFile(path, dstPath)
+	})
+}
+
+// pruneBackups removes old backups keeping only the most recent maxKeep.
+func (h *Handler) pruneBackups(maxKeep int) error {
+	if maxKeep <= 0 {
+		maxKeep = 10 // default
+	}
+
+	entries, err := os.ReadDir(h.BackupsDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+
+	// Collect backup directories and state files
+	var backupDirs, stateFiles []string
+	for _, e := range entries {
+		name := e.Name()
+		if strings.HasPrefix(name, "backup-") && e.IsDir() {
+			backupDirs = append(backupDirs, name)
+		} else if strings.HasPrefix(name, "state-") && strings.HasSuffix(name, ".json") {
+			stateFiles = append(stateFiles, name)
+		}
+	}
+
+	// Sort by name (which includes timestamp, so older first)
+	sort.Strings(backupDirs)
+	sort.Strings(stateFiles)
+
+	// Remove oldest backup directories if over limit
+	if len(backupDirs) > maxKeep {
+		for _, name := range backupDirs[:len(backupDirs)-maxKeep] {
+			_ = os.RemoveAll(filepath.Join(h.BackupsDir, name))
+		}
+	}
+
+	// Remove oldest state files if over limit
+	if len(stateFiles) > maxKeep {
+		for _, name := range stateFiles[:len(stateFiles)-maxKeep] {
+			_ = os.Remove(filepath.Join(h.BackupsDir, name))
+		}
+	}
+
+	return nil
 }
 
 func (h *Handler) latestBackup() (string, error) {

@@ -18,6 +18,9 @@ type TunnelSettings struct {
 	Mode            TunnelMode `json:"mode"`
 	Token           string     `json:"token,omitempty"`
 	CredentialsFile string     `json:"credentials_file,omitempty"`
+	TunnelID        string     `json:"tunnel_id,omitempty"`
+	TunnelName      string     `json:"tunnel_name,omitempty"`
+	AccountID       string     `json:"account_id,omitempty"`
 }
 
 type GlobalSettings struct {
@@ -25,6 +28,7 @@ type GlobalSettings struct {
 	DefaultDomain      string         `json:"default_domain,omitempty"`
 	Tunnel             TunnelSettings `json:"tunnel"`
 	UILocalPort        int            `json:"ui_local_port"`
+	MaxBackups         int            `json:"max_backups,omitempty"` // default 10
 }
 
 type ServiceResources struct {

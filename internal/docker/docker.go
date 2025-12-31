@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os/exec"
 	"strings"
+	"time"
 )
 
 type Runner struct {
@@ -49,6 +50,62 @@ func (r *Runner) PSStatus(ctx context.Context) ([]ContainerStatus, string, error
 		return nil, out, fmt.Errorf("parse compose ps json: %w", err)
 	}
 	return containers, out, nil
+}
+
+// WaitHealthy polls container status until all target services are running and healthy.
+// If services is empty, it checks all services. Returns error on timeout or context cancellation.
+func (r *Runner) WaitHealthy(ctx context.Context, services []string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+
+	// Build a set of target services for quick lookup
+	targets := make(map[string]bool)
+	for _, s := range services {
+		targets[strings.ToLower(s)] = true
+	}
+	checkAll := len(targets) == 0
+
+	for {
+		if time.Now().After(deadline) {
+			return fmt.Errorf("timeout waiting for services to become healthy")
+		}
+
+		containers, _, err := r.PSStatus(ctx)
+		if err == nil && len(containers) > 0 {
+			allHealthy := true
+			for _, c := range containers {
+				svcName := strings.ToLower(c.Service)
+				if !checkAll && !targets[svcName] {
+					continue
+				}
+
+				// Check state is running
+				if c.State != "running" {
+					allHealthy = false
+					break
+				}
+
+				// If container has health check, it must be healthy
+				// Health field is empty string if no healthcheck defined
+				if c.Health != "" && c.Health != "healthy" {
+					allHealthy = false
+					break
+				}
+			}
+
+			if allHealthy {
+				return nil
+			}
+		}
+
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+			// continue polling
+		}
+	}
 }
 
 func (r *Runner) Logs(ctx context.Context, service string, tail int) (string, error) {
