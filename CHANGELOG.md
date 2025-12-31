@@ -39,3 +39,16 @@ All notable changes to tinyserve will be documented in this file.
 ### Fixed
 
 - Deployments no longer promote staging config immediately; they wait for health verification first.
+
+### Testing
+
+- Added unit tests for `internal/state` package (76% coverage)
+  - State validation, InMemoryStore, FileStore with temp directories
+  - Concurrency safety tests
+- Added unit tests for `internal/generate` package (93% coverage)
+  - Name sanitization, hostname collection, Traefik label generation
+  - Compose file generation with healthchecks, volumes, env vars, memory limits
+- Added integration tests for `internal/api` package (30% coverage)
+  - HTTP handler tests using `httptest` and `InMemoryStore`
+  - Service add/list/delete, hostname collision detection
+  - Backup pruning, method validation

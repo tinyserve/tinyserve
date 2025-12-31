@@ -18,4 +18,5 @@
 - [ ] Launchd/docs: include install/run instructions with plist path updates (binary location), add recovery notes for rollback and compose path.
 - [ ] Deployment workflow: document GitHub Actions → registry → pull flow, tag conventions, and registry auth expectations.
 - [ ] Observability: structured daemon logs, log file rotation under `~/Library/Application Support/tinyserve/logs/`.
-- [ ] Testing: add unit tests for state validation, generator output, API handlers, and CLI flag parsing; consider integration test for compose generation.
+- [x] Testing: unit tests for state (76%), generate (93%), and API handlers (30%). Covers service management, hostname validation, backup pruning, compose generation.
+- [ ] Testing: add tests for docker wrapper (mocking exec), cloudflare client (httptest), CLI flag parsing, and full deploy workflow integration tests.
