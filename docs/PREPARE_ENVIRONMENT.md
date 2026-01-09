@@ -2,10 +2,41 @@
 
 An ideal, clean setup for running tinyserve on an Apple Silicon Mac mini via Homebrew distribution (no Go toolchain needed).
 
-## 1) Base system
+## 1) Base system & remote access (do this first, before going headless)
+
+**System updates**:
 - Update macOS to the latest stable release and reboot.
-- Create a dedicated admin user for ops (optional but recommended).
 - Install Xcode Command Line Tools: `xcode-select --install` (accept the prompt).
+
+**Create a dedicated admin user** (recommended):
+- System Settings → Users & Groups → Add User.
+- Choose "Administrator" role; pick a strong password.
+- Log in as this user for all subsequent steps.
+
+**Enable remote access**:
+- System Settings → General → Sharing → enable **Remote Login** (SSH). Restrict to your admin user or group.
+- Optionally enable **Screen Sharing** if you want GUI rescue.
+
+**Note your machine's IP address and hostname** (you'll need these to connect remotely):
+```bash
+# Local hostname (usable as <hostname>.local on the same network)
+scutil --get LocalHostName
+
+# IP address (Ethernet)
+ipconfig getifaddr en0
+
+# IP address (Wi-Fi, if applicable)
+ipconfig getifaddr en1
+
+# List all network interfaces with IPs
+ifconfig | grep "inet "
+```
+
+**Network recommendations**:
+- Set a DHCP reservation or static IP on your router for the Mac mini to keep the IP stable.
+- macOS Application Firewall: leave it on; tinyserve binds to `127.0.0.1` only. No pf tweaks needed.
+- Verify SSH works from another machine on the LAN: `ssh <user>@<mac-mini-ip>` (or `ssh <user>@<hostname>.local`).
+- For off-site access, rely on Cloudflare Tunnel + Access rather than opening ports on your router.
 
 ## 2) Install a Docker runtime (no Docker Desktop)
 Pick one:
@@ -50,14 +81,5 @@ If you prefer to expose tinyserve directly to the internet with your own domain:
 - **Firewall**: allow inbound 80/443 (macOS Application Firewall or your edge firewall).
 - **TLS**: run a reverse proxy with automatic certs (Traefik/Caddy/Nginx+Let’s Encrypt).
 - **Dynamic IP**: if your ISP IP changes, use Dynamic DNS and keep DNS updated.
-
-## 7) Firewall & remote access (headless-ready)
-- macOS Application Firewall: leave it on; tinyserve binds to `127.0.0.1` only. No pf tweaks needed.
-- Enable remote access before going headless:
-  - System Settings → General → Sharing → enable **Remote Login** (SSH). Restrict to your admin user or group.
-  - Optionally enable **Screen Sharing** if you want GUI rescue.
-  - Set a DHCP reservation or static IP on your router for the Mac mini.
-- Verify SSH works from another machine on the LAN: `ssh <user>@<mac-mini-ip>`.
-- For off-site access, rely on Cloudflare Tunnel + Access rather than opening ports on your router.
 
 Now you are ready to use tinyserve: the daemon is running on localhost and the CLI is installed and configured. 
