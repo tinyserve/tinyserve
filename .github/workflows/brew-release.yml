@@ -93,23 +93,33 @@ jobs:
             dist/${{ steps.vars.outputs.tarball }}
             dist/${{ steps.vars.outputs.tarball }}.sha256
 
+      - name: Check tap configuration
+        id: tap
+        env:
+          TAP_INPUT: ${{ inputs.tap }}
+          TAP_SECRET: ${{ secrets.HOMEBREW_TAP }}
+        run: |
+          TAP="${TAP_INPUT:-$TAP_SECRET}"
+          if [ -n "$TAP" ]; then
+            echo "repo=$TAP" >> "$GITHUB_OUTPUT"
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Checkout tap repo
-        if: ${{ (github.event_name == 'push' || inputs.update_tap == 'true') && (inputs.tap != '' || secrets.HOMEBREW_TAP != '') }}
+        if: ${{ (github.event_name == 'push' || inputs.update_tap == 'true') && steps.tap.outputs.configured == 'true' }}
         uses: actions/checkout@v4
         with:
-          repository: ${{ inputs.tap || secrets.HOMEBREW_TAP }}
+          repository: ${{ steps.tap.outputs.repo }}
           token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
           path: tap
 
       - name: Update tap formula
-        if: ${{ (github.event_name == 'push' || inputs.update_tap == 'true') && (inputs.tap != '' || secrets.HOMEBREW_TAP != '') }}
+        if: ${{ (github.event_name == 'push' || inputs.update_tap == 'true') && steps.tap.outputs.configured == 'true' }}
         shell: bash
         run: |
           set -euo pipefail
-          TAP="${{ inputs.tap }}"
-          if [ -z "$TAP" ]; then
-            TAP="${{ secrets.HOMEBREW_TAP }}"
-          fi
           FORMULA_PATH="${{ inputs.formula_path }}"
           if [ -z "$FORMULA_PATH" ]; then
             FORMULA_PATH="Formula/tinyserve.rb"
