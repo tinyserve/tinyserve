@@ -69,6 +69,6 @@ jobs:
 
       - name: Summary
         run: |
-          echo "## Release ${{ steps.bump.outputs.tag }}" >> "$GITHUB_SUMMARY"
-          echo "" >> "$GITHUB_SUMMARY"
-          echo "Tag pushed. The [brew-release workflow](../actions/workflows/brew-release.yml) will now build and publish the release." >> "$GITHUB_SUMMARY"
+          echo "## Release ${{ steps.bump.outputs.tag }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "Tag pushed. The [brew-release workflow](../actions/workflows/brew-release.yml) will now build and publish the release." >> "$GITHUB_STEP_SUMMARY"

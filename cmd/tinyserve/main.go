@@ -90,8 +90,8 @@ commands:
   status                       show daemon status
   checklist                    check system requirements and status
   init --domain D --cloudflare-api-token T --tunnel-name N [--account-id ID]
-  service add --name --image --port [--hostname h] [--env K=V] [--mem MB]
-               [--volume host:container] [--healthcheck "CMD ..."]
+  service add --name --image --port [--hostname h] [--env K=V] [--env-file .env]
+               [--mem MB] [--volume host:container] [--healthcheck "CMD ..."]
   service list                 list all services
   service remove --name NAME   remove a service
   deploy [--service NAME] [--timeout SEC]  pull, restart, and wait for health
@@ -361,6 +361,18 @@ func parseServiceAdd(args []string) (addOptions, error) {
 				return opts, fmt.Errorf("env must be K=V")
 			}
 			opts.Env[kv[0]] = kv[1]
+		case "--env-file":
+			i++
+			if i >= len(args) {
+				return opts, fmt.Errorf("--env-file requires a path")
+			}
+			envFromFile, err := parseEnvFile(args[i])
+			if err != nil {
+				return opts, fmt.Errorf("parse env file: %w", err)
+			}
+			for k, v := range envFromFile {
+				opts.Env[k] = v
+			}
 		case "--mem":
 			i++
 			if i >= len(args) {
@@ -391,6 +403,41 @@ func parseServiceAdd(args []string) (addOptions, error) {
 		return opts, fmt.Errorf("--name, --image, and --port are required")
 	}
 	return opts, nil
+}
+
+func parseEnvFile(path string) (map[string]string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+
+	env := make(map[string]string)
+	for lineNum, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+
+		kv := strings.SplitN(line, "=", 2)
+		if len(kv) != 2 {
+			return nil, fmt.Errorf("line %d: invalid format, expected KEY=value", lineNum+1)
+		}
+
+		key := strings.TrimSpace(kv[0])
+		value := strings.TrimSpace(kv[1])
+
+		// Remove surrounding quotes if present
+		if len(value) >= 2 {
+			if (value[0] == '"' && value[len(value)-1] == '"') ||
+				(value[0] == '\'' && value[len(value)-1] == '\'') {
+				value = value[1 : len(value)-1]
+			}
+		}
+
+		env[key] = value
+	}
+
+	return env, nil
 }
 
 func cmdDeploy(args []string) error {

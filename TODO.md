@@ -21,3 +21,10 @@
 - [ ] Deployment workflow: document GitHub Actions → registry → pull flow, tag conventions, and registry auth expectations.
 - [ ] Observability: structured daemon logs, log file rotation under `~/Library/Application Support/tinyserve/logs/`.
 - [ ] Testing: add tests for docker wrapper (mocking exec), cloudflare client (httptest), CLI flag parsing, and full deploy workflow integration tests.
+- [ ] Backup/Restore: implement `tinyserve backup` subcommand with S3-compatible storage support:
+  - `tinyserve backup config` — configure S3 bucket, credentials, endpoint.
+  - `tinyserve backup create [--full | --partial]` — create and upload backup.
+  - `tinyserve backup list` — list available backups from S3.
+  - `tinyserve backup restore <timestamp>` — download and restore from S3.
+  - `tinyserve backup schedule` — configure periodic backups via launchd.
+  - WAL shipping for near real-time SQLite backup (continuous mode).

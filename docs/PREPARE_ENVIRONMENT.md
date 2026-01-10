@@ -81,11 +81,56 @@ Notes:
   - Update the binary path inside to the Homebrew install.
   - `launchctl load ~/Library/LaunchAgents/dev.tinyserve.daemon.plist`
 
-## 7) Cloudflare & domain
+## 7) Backup Configuration (recommended)
+
+Set up S3-compatible backup storage before running production workloads.
+
+**Install AWS CLI**:
+```bash
+brew install awscli
+```
+
+**Configure credentials** (add to `~/.zshrc` or `~/.bash_profile`):
+```bash
+export AWS_ACCESS_KEY_ID="your-access-key"
+export AWS_SECRET_ACCESS_KEY="your-secret-key"
+export S3_BACKUP_BUCKET="your-bucket"
+export S3_BACKUP_PREFIX="tinyserve-backups"
+# For non-AWS providers:
+# export AWS_ENDPOINT_URL="https://your-s3-endpoint.com"
+```
+
+**Verify S3 access**:
+```bash
+aws s3 ls s3://${S3_BACKUP_BUCKET}/
+```
+
+**Install backup scripts**:
+```bash
+mkdir -p ~/bin
+# Copy scripts from docs/BACKUP_RESTORE.md or use tinyserve backup commands
+chmod +x ~/bin/tinyserve-backup-*.sh
+```
+
+**Configure scheduled backups** (see `docs/BACKUP_RESTORE.md` for full details):
+- Daily partial backups (state + configs, ~5 MB)
+- Weekly full backups (includes Docker images)
+- Optional: 5-minute WAL shipping for near real-time recovery
+
+**Test backup/restore**:
+```bash
+# Create test backup
+~/bin/tinyserve-backup-partial.sh
+
+# Verify it uploaded
+aws s3 ls "s3://${S3_BACKUP_BUCKET}/${S3_BACKUP_PREFIX}/partial/"
+```
+
+## 8) Cloudflare & domain
 - Tunnel creation and hostname wiring will be automated by tinyserve (see `docs/GETTING_STARTED.md`).
 - Keep your Cloudflare API token or tunnel token handy for that step.
 
-## 7b) Optional: custom domain via reverse proxy + port forward (no Cloudflare Tunnel)
+## 8b) Optional: custom domain via reverse proxy + port forward (no Cloudflare Tunnel)
 If you prefer to expose tinyserve directly to the internet with your own domain:
 - **DNS**: point your domain (and any subdomains) to your public IP (A/AAAA records).
 - **Router**: forward TCP ports **80** and **443** to this Mac mini.
