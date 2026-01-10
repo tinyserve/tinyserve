@@ -15,7 +15,7 @@ on:
 
 jobs:
   release:
-    runs-on: ubuntu-latest
+    runs-on: macos-14
     permissions:
       contents: write
     steps:
@@ -23,52 +23,105 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Get latest tag
-        id: latest
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Get latest tag and bump version
+        id: version
         run: |
           TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
-          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-          echo "Latest tag: $TAG"
-
-      - name: Bump version
-        id: bump
-        run: |
-          TAG="${{ steps.latest.outputs.tag }}"
           VERSION="${TAG#v}"
-
           IFS='.' read -r MAJOR MINOR PATCH <<< "$VERSION"
 
           case "${{ inputs.bump }}" in
-            major)
-              MAJOR=$((MAJOR + 1))
-              MINOR=0
-              PATCH=0
-              ;;
-            minor)
-              MINOR=$((MINOR + 1))
-              PATCH=0
-              ;;
-            patch)
-              PATCH=$((PATCH + 1))
-              ;;
+            major) MAJOR=$((MAJOR + 1)); MINOR=0; PATCH=0 ;;
+            minor) MINOR=$((MINOR + 1)); PATCH=0 ;;
+            patch) PATCH=$((PATCH + 1)) ;;
           esac
 
           NEW_VERSION="${MAJOR}.${MINOR}.${PATCH}"
           NEW_TAG="v${NEW_VERSION}"
+          TARBALL="tinyserve_${NEW_VERSION}_darwin_arm64.tar.gz"
 
           echo "version=$NEW_VERSION" >> "$GITHUB_OUTPUT"
           echo "tag=$NEW_TAG" >> "$GITHUB_OUTPUT"
+          echo "tarball=$TARBALL" >> "$GITHUB_OUTPUT"
           echo "Bumping ${{ inputs.bump }}: $TAG -> $NEW_TAG"
 
-      - name: Create and push tag
+      - name: Build binaries
+        run: |
+          mkdir -p dist
+          VERSION="${{ steps.version.outputs.version }}"
+          COMMIT="${{ github.sha }}"
+          DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          LDFLAGS="-s -w -X tinyserve/internal/version.Version=${VERSION} -X tinyserve/internal/version.Commit=${COMMIT:0:7} -X tinyserve/internal/version.Date=${DATE}"
+          GOOS=darwin GOARCH=arm64 go build -trimpath -ldflags "$LDFLAGS" -o dist/tinyserve ./cmd/tinyserve
+          GOOS=darwin GOARCH=arm64 go build -trimpath -ldflags "$LDFLAGS" -o dist/tinyserved ./cmd/tinyserved
+
+      - name: Package tarball
+        run: |
+          cd dist
+          tar -czf "${{ steps.version.outputs.tarball }}" tinyserve tinyserved
+          shasum -a 256 "${{ steps.version.outputs.tarball }}" | awk '{print $1}' > "${{ steps.version.outputs.tarball }}.sha256"
+
+      - name: Create tag
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git tag -a "${{ steps.bump.outputs.tag }}" -m "Release ${{ steps.bump.outputs.tag }}"
-          git push origin "${{ steps.bump.outputs.tag }}"
+          git tag -a "${{ steps.version.outputs.tag }}" -m "Release ${{ steps.version.outputs.tag }}"
+          git push origin "${{ steps.version.outputs.tag }}"
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          files: |
+            dist/${{ steps.version.outputs.tarball }}
+            dist/${{ steps.version.outputs.tarball }}.sha256
+
+      - name: Update Homebrew tap
+        env:
+          TAP_REPO: ${{ secrets.HOMEBREW_TAP }}
+          TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        if: ${{ env.TAP_REPO != '' && env.TAP_TOKEN != '' }}
+        run: |
+          SHA="$(cat "dist/${{ steps.version.outputs.tarball }}.sha256")"
+          URL="https://github.com/${{ github.repository }}/releases/download/${{ steps.version.outputs.tag }}/${{ steps.version.outputs.tarball }}"
+
+          git clone "https://x-access-token:${TAP_TOKEN}@github.com/${TAP_REPO}.git" tap
+          
+          cat > "tap/Formula/tinyserve.rb" <<EOF
+          class Tinyserve < Formula
+            desc "Local host manager for a single Mac mini running small Docker services"
+            homepage "https://github.com/${{ github.repository }}"
+            url "$URL"
+            sha256 "$SHA"
+            version "${{ steps.version.outputs.version }}"
+
+            def install
+              bin.install "tinyserve"
+              bin.install "tinyserved"
+            end
+          end
+          EOF
+
+          cd tap
+          if git diff --quiet; then
+            echo "No changes to commit."
+            exit 0
+          fi
+          git add Formula/tinyserve.rb
+          git -c user.name="github-actions[bot]" -c user.email="github-actions[bot]@users.noreply.github.com" \
+            commit -m "tinyserve ${{ steps.version.outputs.version }}"
+          git push
 
       - name: Summary
         run: |
-          echo "## Release ${{ steps.bump.outputs.tag }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "## Released ${{ steps.version.outputs.tag }}" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo "Tag pushed. The [brew-release workflow](../actions/workflows/brew-release.yml) will now build and publish the release." >> "$GITHUB_STEP_SUMMARY"
+          echo "- GitHub Release: https://github.com/${{ github.repository }}/releases/tag/${{ steps.version.outputs.tag }}" >> "$GITHUB_STEP_SUMMARY"
+          if [ -n "${{ secrets.HOMEBREW_TAP }}" ]; then
+            echo "- Homebrew tap updated" >> "$GITHUB_STEP_SUMMARY"
+          fi
