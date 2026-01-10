@@ -13,6 +13,7 @@ import (
 
 	"tinyserve/internal/api"
 	"tinyserve/internal/state"
+	"tinyserve/internal/version"
 	"tinyserve/webui"
 )
 
@@ -23,6 +24,8 @@ func main() {
 }
 
 func run() error {
+	log.Printf("starting %s", version.String())
+
 	// Set up signal handling for graceful shutdown
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()

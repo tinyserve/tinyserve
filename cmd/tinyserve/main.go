@@ -8,8 +8,12 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"strconv"
 	"strings"
+	"time"
+
+	"tinyserve/internal/version"
 )
 
 const defaultAPIAddr = "http://127.0.0.1:7070"
@@ -22,6 +26,9 @@ func main() {
 
 	var err error
 	switch os.Args[1] {
+	case "version", "--version", "-v":
+		fmt.Println(version.String())
+		return
 	case "status":
 		err = cmdStatus()
 	case "init":
@@ -34,6 +41,8 @@ func main() {
 		err = cmdLogs(os.Args[2:])
 	case "rollback":
 		err = cmdRollback()
+	case "checklist":
+		err = cmdChecklist()
 	default:
 		usage()
 		return
@@ -77,7 +86,9 @@ func usage() {
 	fmt.Fprintf(os.Stderr, `usage: tinyserve <command>
 
 commands:
+  version                      show version info
   status                       show daemon status
+  checklist                    check system requirements and status
   init --domain D --cloudflare-api-token T --tunnel-name N [--account-id ID]
   service add --name --image --port [--hostname h] [--env K=V] [--mem MB]
                [--volume host:container] [--healthcheck "CMD ..."]
@@ -508,6 +519,86 @@ func cmdRollback() error {
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", "  ")
 	return enc.Encode(out)
+}
+
+func cmdChecklist() error {
+	fmt.Println("tinyserve checklist")
+	fmt.Println(strings.Repeat("=", 40))
+
+	allPassed := true
+
+	// 1. Check Docker installed
+	fmt.Print("Docker installed.............. ")
+	if _, err := exec.LookPath("docker"); err != nil {
+		fmt.Println("✗ NOT FOUND")
+		allPassed = false
+	} else {
+		fmt.Println("✓")
+	}
+
+	// 2. Check Docker daemon running
+	fmt.Print("Docker daemon running......... ")
+	cmd := exec.Command("docker", "info")
+	if err := cmd.Run(); err != nil {
+		fmt.Println("✗ NOT RUNNING")
+		allPassed = false
+	} else {
+		fmt.Println("✓")
+	}
+
+	// 3. Check tinyserved daemon responding
+	fmt.Print("tinyserved daemon............. ")
+	client := http.Client{Timeout: 2 * time.Second}
+	resp, err := client.Get(apiBase() + "/status")
+	if err != nil {
+		fmt.Println("✗ NOT RESPONDING")
+		allPassed = false
+	} else {
+		resp.Body.Close()
+		if resp.StatusCode < 300 {
+			fmt.Println("✓")
+		} else {
+			fmt.Printf("✗ HTTP %d\n", resp.StatusCode)
+			allPassed = false
+		}
+	}
+
+	// 4. Check launchd agent installed
+	fmt.Print("launchd agent installed....... ")
+	plistPath := os.ExpandEnv("$HOME/Library/LaunchAgents/dev.tinyserve.daemon.plist")
+	if _, err := os.Stat(plistPath); err != nil {
+		fmt.Println("✗ NOT INSTALLED")
+		allPassed = false
+	} else {
+		fmt.Println("✓")
+	}
+
+	// 5. Check launchd agent loaded
+	fmt.Print("launchd agent loaded.......... ")
+	cmd = exec.Command("launchctl", "list")
+	output, err := cmd.Output()
+	if err != nil {
+		fmt.Println("? (launchctl error)")
+		allPassed = false
+	} else if strings.Contains(string(output), "dev.tinyserve.daemon") {
+		fmt.Println("✓")
+	} else {
+		fmt.Println("✗ NOT LOADED")
+		allPassed = false
+	}
+
+	fmt.Println(strings.Repeat("=", 40))
+	if allPassed {
+		fmt.Println("All checks passed!")
+		return nil
+	}
+	fmt.Println("Some checks failed. See hints below:")
+	fmt.Println("")
+	fmt.Println("• Docker: Install from https://docker.com/products/docker-desktop")
+	fmt.Println("• Daemon: Run 'tinyserved' or load the launchd agent")
+	fmt.Println("• Launchd: cp docs/launchd/tinyserved.plist ~/Library/LaunchAgents/dev.tinyserve.daemon.plist")
+	fmt.Println("           launchctl load ~/Library/LaunchAgents/dev.tinyserve.daemon.plist")
+	return nil
 }
 
 func wrapConnError(err error) error {

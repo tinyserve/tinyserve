@@ -62,8 +62,12 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p dist
-          GOOS=darwin GOARCH=arm64 go build -trimpath -o dist/tinyserve ./cmd/tinyserve
-          GOOS=darwin GOARCH=arm64 go build -trimpath -o dist/tinyserved ./cmd/tinyserved
+          VERSION="${{ steps.vars.outputs.version }}"
+          COMMIT="${{ github.sha }}"
+          DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          LDFLAGS="-s -w -X tinyserve/internal/version.Version=${VERSION} -X tinyserve/internal/version.Commit=${COMMIT:0:7} -X tinyserve/internal/version.Date=${DATE}"
+          GOOS=darwin GOARCH=arm64 go build -trimpath -ldflags "$LDFLAGS" -o dist/tinyserve ./cmd/tinyserve
+          GOOS=darwin GOARCH=arm64 go build -trimpath -ldflags "$LDFLAGS" -o dist/tinyserved ./cmd/tinyserved
 
       - name: Package tarball
         run: |
