@@ -233,3 +233,199 @@ func TestTunnelModes(t *testing.T) {
 		t.Errorf("TunnelModeCredentialsFile = %q, want 'credentials_file'", TunnelModeCredentialsFile)
 	}
 }
+
+func TestSQLiteStore(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "tinyserve-sqlite-test-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	dbPath := filepath.Join(tmpDir, "state.db")
+	store, err := NewSQLiteStore(dbPath)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore() error = %v", err)
+	}
+	defer store.Close()
+
+	ctx := context.Background()
+
+	// Load from empty DB should return new state
+	s, err := store.Load(ctx)
+	if err != nil {
+		t.Fatalf("Load() from empty DB error = %v", err)
+	}
+	if s.Settings.ComposeProjectName != "tinyserve" {
+		t.Error("Load() from empty DB should return default state")
+	}
+
+	// Save and reload
+	s.Settings.DefaultDomain = "test.example.com"
+	s.Settings.Tunnel.Mode = TunnelModeCredentialsFile
+	s.Settings.Tunnel.TunnelID = "abc123"
+	s.Services = append(s.Services, Service{
+		ID:           "test-123",
+		Name:         "test",
+		Type:         ServiceTypeRegistryImage,
+		Image:        "nginx:latest",
+		InternalPort: 80,
+		Enabled:      true,
+		Hostnames:    []string{"test.example.com"},
+		Env:          map[string]string{"FOO": "bar"},
+		Volumes:      []string{"/data:/data"},
+		Healthcheck: &ServiceHealthcheck{
+			Command:         []string{"curl", "-f", "http://localhost/"},
+			IntervalSeconds: 30,
+			Retries:         3,
+		},
+		Resources: ServiceResources{MemoryLimitMB: 512},
+	})
+
+	if err := store.Save(ctx, s); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+
+	// Reload and verify
+	reloaded, err := store.Load(ctx)
+	if err != nil {
+		t.Fatalf("Load() after Save() error = %v", err)
+	}
+	if reloaded.Settings.DefaultDomain != "test.example.com" {
+		t.Error("Load() did not restore DefaultDomain")
+	}
+	if reloaded.Settings.Tunnel.Mode != TunnelModeCredentialsFile {
+		t.Error("Load() did not restore Tunnel.Mode")
+	}
+	if reloaded.Settings.Tunnel.TunnelID != "abc123" {
+		t.Error("Load() did not restore Tunnel.TunnelID")
+	}
+	if len(reloaded.Services) != 1 {
+		t.Fatalf("Load() restored %d services, want 1", len(reloaded.Services))
+	}
+
+	svc := reloaded.Services[0]
+	if svc.Name != "test" {
+		t.Error("Load() did not restore service name")
+	}
+	if len(svc.Hostnames) != 1 || svc.Hostnames[0] != "test.example.com" {
+		t.Errorf("Load() did not restore hostnames: %v", svc.Hostnames)
+	}
+	if svc.Env["FOO"] != "bar" {
+		t.Error("Load() did not restore env")
+	}
+	if len(svc.Volumes) != 1 || svc.Volumes[0] != "/data:/data" {
+		t.Error("Load() did not restore volumes")
+	}
+	if svc.Healthcheck == nil || len(svc.Healthcheck.Command) != 3 {
+		t.Error("Load() did not restore healthcheck")
+	}
+	if svc.Resources.MemoryLimitMB != 512 {
+		t.Error("Load() did not restore resources")
+	}
+}
+
+func TestSQLiteStoreServiceDeletion(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "tinyserve-sqlite-test-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	dbPath := filepath.Join(tmpDir, "state.db")
+	store, err := NewSQLiteStore(dbPath)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore() error = %v", err)
+	}
+	defer store.Close()
+
+	ctx := context.Background()
+
+	// Add two services
+	s := NewState()
+	s.Services = []Service{
+		{ID: "svc1", Name: "one", Image: "img1", InternalPort: 80},
+		{ID: "svc2", Name: "two", Image: "img2", InternalPort: 8080},
+	}
+	if err := store.Save(ctx, s); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+
+	// Remove one service
+	s.Services = []Service{
+		{ID: "svc1", Name: "one", Image: "img1", InternalPort: 80},
+	}
+	if err := store.Save(ctx, s); err != nil {
+		t.Fatalf("Save() after delete error = %v", err)
+	}
+
+	// Verify only one remains
+	reloaded, err := store.Load(ctx)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if len(reloaded.Services) != 1 {
+		t.Errorf("expected 1 service after deletion, got %d", len(reloaded.Services))
+	}
+	if reloaded.Services[0].ID != "svc1" {
+		t.Error("wrong service remained after deletion")
+	}
+}
+
+func TestSQLiteStoreConcurrency(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "tinyserve-sqlite-test-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	dbPath := filepath.Join(tmpDir, "state.db")
+	store, err := NewSQLiteStore(dbPath)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore() error = %v", err)
+	}
+	defer store.Close()
+
+	ctx := context.Background()
+
+	var wg sync.WaitGroup
+	for i := 0; i < 50; i++ {
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			_, _ = store.Load(ctx)
+		}()
+		go func(n int) {
+			defer wg.Done()
+			s, _ := store.Load(ctx)
+			s.Settings.UILocalPort = n
+			_ = store.Save(ctx, s)
+		}(i)
+	}
+	wg.Wait()
+}
+
+func TestSQLiteStoreValidation(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "tinyserve-sqlite-test-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	dbPath := filepath.Join(tmpDir, "state.db")
+	store, err := NewSQLiteStore(dbPath)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore() error = %v", err)
+	}
+	defer store.Close()
+
+	ctx := context.Background()
+
+	// Try to save invalid state
+	s := State{
+		Settings: GlobalSettings{ComposeProjectName: ""},
+	}
+	err = store.Save(ctx, s)
+	if err == nil {
+		t.Error("Save() should reject invalid state")
+	}
+}

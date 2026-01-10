@@ -38,7 +38,18 @@ ifconfig | grep "inet "
 - Verify SSH works from another machine on the LAN: `ssh <user>@<mac-mini-ip>` (or `ssh <user>@<hostname>.local`).
 - For off-site access, rely on Cloudflare Tunnel + Access rather than opening ports on your router.
 
-## 2) Install a Docker runtime (no Docker Desktop)
+## 2) Install Homebrew
+```bash
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+```
+- Follow the on-screen instructions to add Homebrew to your PATH.
+- For Apple Silicon Macs, add to your shell profile (`~/.zprofile` or `~/.bash_profile`):
+  ```bash
+  eval "$(/opt/homebrew/bin/brew shellenv)"
+  ```
+- Verify: `brew --version`
+
+## 3) Install a Docker runtime (no Docker Desktop)
 Pick one:
 - **Colima (recommended)**: `brew install colima docker` then `colima start --arch aarch64 --vm-type vz --cpu 4 --memory 8`
   - Verify daemon: `docker info`
@@ -50,18 +61,18 @@ Notes:
 - macOS cannot run the upstream Docker Engine natively; you need a VM-backed runtime like Colima/Rancher.
 - Keep `docker` CLI installed (`brew install docker`) even when using Colima/Rancher; it talks to the socket they expose.
 
-## 3) Install tinyserve (brew)
+## 4) Install tinyserve (brew)
 - If tinyserve is in Homebrew core: `brew install tinyserve`
 - If using a tap: `brew tap tinyserve/tinyserve` then `brew install tinyserve`
 - Ensure Homebrew’s `bin` is on `PATH` (e.g., `/opt/homebrew/bin` or `/usr/local/bin`).
 - Verify: `tinyserve --help`
 
-## 4) Tinyserve data root
+## 5) Tinyserve data root
 - Create the data root:
   - `mkdir -p "~/Library/Application Support/tinyserve"/{generated,backups,logs,services,traefik,cloudflared}`
 - Leave it empty; tinyserve will manage configs and state.
 
-## 5) Launch daemon
+## 6) Launch daemon
 - Foreground sanity check:
   - `TINYSERVE_API=http://127.0.0.1:7070 tinyserved`
   - In another terminal: `curl http://127.0.0.1:7070/status`
@@ -70,11 +81,11 @@ Notes:
   - Update the binary path inside to the Homebrew install.
   - `launchctl load ~/Library/LaunchAgents/dev.tinyserve.daemon.plist`
 
-## 6) Cloudflare & domain
+## 7) Cloudflare & domain
 - Tunnel creation and hostname wiring will be automated by tinyserve (see `docs/GETTING_STARTED.md`).
 - Keep your Cloudflare API token or tunnel token handy for that step.
 
-## 6b) Optional: custom domain via reverse proxy + port forward (no Cloudflare Tunnel)
+## 7b) Optional: custom domain via reverse proxy + port forward (no Cloudflare Tunnel)
 If you prefer to expose tinyserve directly to the internet with your own domain:
 - **DNS**: point your domain (and any subdomains) to your public IP (A/AAAA records).
 - **Router**: forward TCP ports **80** and **443** to this Mac mini.

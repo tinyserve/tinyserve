@@ -6,6 +6,19 @@ All notable changes to tinyserve will be documented in this file.
 
 ### Added
 
+- **SQLite persistence**: State is now stored in SQLite (`state.db`) instead of JSON.
+  - Schema with `settings` and `services` tables
+  - WAL mode for safe concurrent access
+  - Automatic schema migrations
+  - Validation on write
+
+- **Streaming logs**: New `/logs?follow=1` API endpoint for real-time log streaming.
+  - CLI: `tinyserve logs --service NAME --follow` (or `-f`)
+
+- **Health endpoint**: New `/health` API endpoint exposing proxy/tunnel status with error details.
+
+- **CLI error hints**: Connection errors now show helpful hints about starting the daemon.
+
 - **Health polling after deploy**: Deployments now wait for services to become healthy before promoting the new configuration. Configurable timeout via `--timeout` flag (default 60s). Auto-rollback on health check failure.
 
 - **`tinyserve init` command**: One-shot setup that creates a Cloudflare Tunnel via API and configures tinyserve.
@@ -28,11 +41,13 @@ All notable changes to tinyserve will be documented in this file.
   - `service remove --name NAME` - Removes a service from configuration
   - `--volume` flag for `service add` - Mount host directories into containers
   - `--healthcheck` flag for `service add` - Define container health checks
+  - `--follow` / `-f` flag for `logs` - Stream logs in real-time
 
 - **Cloudflare API client** (`internal/cloudflare/`): New package for programmatic tunnel management (create, list, get token).
 
 ### Changed
 
+- State storage switched from JSON file to SQLite database.
 - Deploy response status changed from `"deploy_started"` to `"deployed"` to reflect that deployment now waits for health.
 - `NewHandler()` now requires an additional `cloudflaredDir` parameter.
 
@@ -44,7 +59,8 @@ All notable changes to tinyserve will be documented in this file.
 
 - Added unit tests for `internal/state` package (76% coverage)
   - State validation, InMemoryStore, FileStore with temp directories
-  - Concurrency safety tests
+  - SQLiteStore with schema migrations and concurrency tests
+  - Concurrency safety tests with race detector
 - Added unit tests for `internal/generate` package (93% coverage)
   - Name sanitization, hostname collection, Traefik label generation
   - Compose file generation with healthchecks, volumes, env vars, memory limits

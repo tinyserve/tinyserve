@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os/exec"
 	"strings"
 	"time"
@@ -115,6 +116,26 @@ func (r *Runner) Logs(ctx context.Context, service string, tail int) (string, er
 	}
 	args = append(args, service)
 	return r.run(ctx, args...)
+}
+
+// LogsFollow streams logs to the provided writer until context is cancelled.
+func (r *Runner) LogsFollow(ctx context.Context, service string, tail int, w io.Writer) error {
+	args := []string{"compose", "logs", "-f", "--no-log-prefix"}
+	if tail > 0 {
+		args = append(args, "--tail", fmt.Sprintf("%d", tail))
+	}
+	args = append(args, service)
+
+	cmd := exec.CommandContext(ctx, "docker", args...)
+	cmd.Dir = r.Workdir
+	cmd.Stdout = w
+	cmd.Stderr = w
+
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("start logs: %w", err)
+	}
+
+	return cmd.Wait()
 }
 
 func (r *Runner) run(ctx context.Context, args ...string) (string, error) {

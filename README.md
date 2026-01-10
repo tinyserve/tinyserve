@@ -6,7 +6,7 @@ Local host manager for a single Mac mini running small Docker services. The daem
 
 - `cmd/tinyserved` — background daemon exposing the localhost REST API and serving the web UI.
 - `cmd/tinyserve` — CLI that talks to the daemon over HTTP.
-- `internal/state` — state model plus JSON file-backed store (swap with SQLite later if desired).
+- `internal/state` — state model plus SQLite-backed store with migrations and concurrent access handling.
 - `internal/generate` — compose/cloudflared/Traefik file generation (staging-first apply flow).
 - `internal/docker` — thin wrapper around `docker compose` execution.
 - `internal/api` — REST handlers for daemon endpoints.
@@ -38,6 +38,6 @@ Generated and runtime files live at `~/Library/Application Support/tinyserve/` (
 
 ## Next steps
 
-- Switch the JSON store to SQLite-backed persistence and validation for service changes.
-- Flesh out config generation to include user-defined services, safe apply/promotion, and backups.
-- Harden deploy/rollback (state + config snapshots) and add Cloudflare credential validation.
+- Enhance Web UI with forms for service management and live logs view.
+- Add documentation for non-Cloudflare Tunnel setups (reverse proxy + firewall).
+- Add deployment workflow documentation (GitHub Actions → registry → pull).

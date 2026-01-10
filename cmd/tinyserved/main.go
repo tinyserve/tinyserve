@@ -32,7 +32,12 @@ func run() error {
 		return err
 	}
 
-	store := state.NewFileStore(filepath.Join(dataDir, "state.json"))
+	store, err := state.NewSQLiteStore(filepath.Join(dataDir, "state.db"))
+	if err != nil {
+		return fmt.Errorf("open state db: %w", err)
+	}
+	defer store.Close()
+
 	initialState, err := store.Load(ctx)
 	if err != nil {
 		return fmt.Errorf("load state: %w", err)
@@ -45,7 +50,7 @@ func run() error {
 	backupsDir := filepath.Join(dataDir, "backups")
 	cloudflaredDir := filepath.Join(dataDir, "cloudflared")
 
-	handler := api.NewHandler(store, generatedRoot, backupsDir, filepath.Join(dataDir, "state.json"), cloudflaredDir)
+	handler := api.NewHandler(store, generatedRoot, backupsDir, filepath.Join(dataDir, "state.db"), cloudflaredDir)
 	mux := http.NewServeMux()
 	handler.RegisterRoutes(mux)
 	mux.Handle("/", webui.Handler())
@@ -58,7 +63,7 @@ func run() error {
 	// Start server in goroutine
 	errChan := make(chan error, 1)
 	go func() {
-		log.Printf("tinyserved listening on %s (state: %s)", server.Addr, filepath.Join(dataDir, "state.json"))
+		log.Printf("tinyserved listening on %s (state: %s)", server.Addr, filepath.Join(dataDir, "state.db"))
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			errChan <- err
 		}

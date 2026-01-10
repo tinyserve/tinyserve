@@ -48,7 +48,7 @@ func main() {
 func cmdStatus() error {
 	resp, err := http.Get(apiBase() + "/status")
 	if err != nil {
-		return fmt.Errorf("request status: %w", err)
+		return wrapConnError(err)
 	}
 	defer resp.Body.Close()
 
@@ -84,7 +84,7 @@ commands:
   service list                 list all services
   service remove --name NAME   remove a service
   deploy [--service NAME] [--timeout SEC]  pull, restart, and wait for health
-  logs --service NAME [--tail N]
+  logs --service NAME [--tail N] [--follow]
   rollback                     restore last backup
 `)
 }
@@ -143,7 +143,7 @@ func cmdInit(args []string) error {
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return err
+		return wrapConnError(err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 300 {
@@ -204,7 +204,7 @@ func cmdServiceAdd(args []string) error {
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return err
+		return wrapConnError(err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 300 {
@@ -223,7 +223,7 @@ func cmdServiceAdd(args []string) error {
 func cmdServiceList() error {
 	resp, err := http.Get(apiBase() + "/services")
 	if err != nil {
-		return err
+		return wrapConnError(err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 300 {
@@ -283,7 +283,7 @@ func cmdServiceRemove(args []string) error {
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return err
+		return wrapConnError(err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 300 {
@@ -421,7 +421,7 @@ func cmdDeploy(args []string) error {
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return err
+		return wrapConnError(err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 300 {
@@ -439,6 +439,7 @@ func cmdDeploy(args []string) error {
 
 func cmdLogs(args []string) error {
 	var service string
+	var follow bool
 	tail := 200
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
@@ -458,6 +459,8 @@ func cmdLogs(args []string) error {
 				return fmt.Errorf("invalid tail: %w", err)
 			}
 			tail = n
+		case "--follow", "-f":
+			follow = true
 		default:
 			return fmt.Errorf("unknown flag: %s", args[i])
 		}
@@ -468,9 +471,12 @@ func cmdLogs(args []string) error {
 	q := url.Values{}
 	q.Set("service", service)
 	q.Set("tail", strconv.Itoa(tail))
+	if follow {
+		q.Set("follow", "1")
+	}
 	resp, err := http.Get(apiBase() + "/logs?" + q.Encode())
 	if err != nil {
-		return err
+		return wrapConnError(err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 300 {
@@ -488,7 +494,7 @@ func cmdRollback() error {
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return err
+		return wrapConnError(err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 300 {
@@ -502,4 +508,17 @@ func cmdRollback() error {
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", "  ")
 	return enc.Encode(out)
+}
+
+func wrapConnError(err error) error {
+	if err == nil {
+		return nil
+	}
+	errStr := err.Error()
+	if strings.Contains(errStr, "connection refused") ||
+		strings.Contains(errStr, "no such host") ||
+		strings.Contains(errStr, "dial tcp") {
+		return fmt.Errorf("%w\n\nHint: Is the daemon running? Start it with:\n  tinyserved\n\nOr check status with:\n  launchctl list | grep tinyserve", err)
+	}
+	return err
 }

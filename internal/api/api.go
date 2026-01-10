@@ -46,6 +46,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/rollback", h.handleRollback)
 	mux.HandleFunc("/logs", h.handleLogs)
 	mux.HandleFunc("/init", h.handleInit)
+	mux.HandleFunc("/health", h.handleHealth)
 }
 
 func (h *Handler) handleStatus(w http.ResponseWriter, r *http.Request) {
@@ -391,7 +392,42 @@ func (h *Handler) handleLogs(w http.ResponseWriter, r *http.Request) {
 			tail = n
 		}
 	}
+
+	follow := r.URL.Query().Get("follow") == "1"
 	runner := docker.NewRunner(h.currentDir())
+
+	if follow {
+		w.Header().Set("Content-Type", "text/plain")
+		w.Header().Set("Transfer-Encoding", "chunked")
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			http.Error(w, "streaming not supported", http.StatusInternalServerError)
+			return
+		}
+
+		ctx := r.Context()
+		pr, pw := io.Pipe()
+		go func() {
+			_ = runner.LogsFollow(ctx, sanitizeName(service), tail, pw)
+			pw.Close()
+		}()
+
+		buf := make([]byte, 4096)
+		for {
+			n, err := pr.Read(buf)
+			if n > 0 {
+				w.Write(buf[:n])
+				flusher.Flush()
+			}
+			if err != nil {
+				break
+			}
+		}
+		return
+	}
+
 	out, err := runner.Logs(r.Context(), sanitizeName(service), tail)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("logs: %v", err), http.StatusInternalServerError)
@@ -773,4 +809,67 @@ func writeJSON(w http.ResponseWriter, data any) {
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
 	_ = enc.Encode(data)
+}
+
+func (h *Handler) handleHealth(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	ctx := r.Context()
+	statusMap, err := h.containerStatus(ctx)
+
+	result := map[string]any{
+		"daemon": "ok",
+	}
+
+	if err != nil {
+		result["error"] = err.Error()
+	}
+
+	proxyStatus := statusMap["traefik"]
+	tunnelStatus := statusMap["cloudflared"]
+
+	proxy := map[string]any{
+		"running": proxyStatus.State == "running",
+		"state":   proxyStatus.State,
+	}
+	if proxyStatus.Health != "" {
+		proxy["health"] = proxyStatus.Health
+	}
+	if proxyStatus.State != "running" && proxyStatus.State != "" {
+		proxy["error"] = fmt.Sprintf("proxy container not running: %s", proxyStatus.State)
+	} else if proxyStatus.State == "" {
+		proxy["error"] = "proxy container not found"
+		proxy["running"] = false
+	}
+
+	tunnel := map[string]any{
+		"running": tunnelStatus.State == "running",
+		"state":   tunnelStatus.State,
+	}
+	if tunnelStatus.Health != "" {
+		tunnel["health"] = tunnelStatus.Health
+	}
+	if tunnelStatus.State != "running" && tunnelStatus.State != "" {
+		tunnel["error"] = fmt.Sprintf("tunnel container not running: %s", tunnelStatus.State)
+	} else if tunnelStatus.State == "" {
+		tunnel["error"] = "tunnel container not found"
+		tunnel["running"] = false
+	}
+
+	result["proxy"] = proxy
+	result["tunnel"] = tunnel
+
+	allHealthy := proxyStatus.State == "running" && tunnelStatus.State == "running"
+	if proxyStatus.Health != "" && proxyStatus.Health != "healthy" {
+		allHealthy = false
+	}
+	if tunnelStatus.Health != "" && tunnelStatus.Health != "healthy" {
+		allHealthy = false
+	}
+	result["healthy"] = allHealthy
+
+	writeJSON(w, result)
 }
