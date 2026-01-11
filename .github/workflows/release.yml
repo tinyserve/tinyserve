@@ -109,11 +109,11 @@ jobs:
           EOF
 
           cd tap
-          if git diff --quiet; then
+          git add Formula/tinyserve.rb
+          if git diff --cached --quiet; then
             echo "No changes to commit."
             exit 0
           fi
-          git add Formula/tinyserve.rb
           git -c user.name="github-actions[bot]" -c user.email="github-actions[bot]@users.noreply.github.com" \
             commit -m "tinyserve ${{ steps.version.outputs.version }}"
           git push
