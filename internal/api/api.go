@@ -475,8 +475,8 @@ func (h *Handler) handleInit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if req.Domain == "" || req.APIToken == "" || req.TunnelName == "" {
-		http.Error(w, "domain, api_token, and tunnel_name are required", http.StatusBadRequest)
+	if req.APIToken == "" || req.TunnelName == "" {
+		http.Error(w, "api_token and tunnel_name are required", http.StatusBadRequest)
 		return
 	}
 

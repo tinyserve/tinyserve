@@ -93,7 +93,7 @@ commands:
   version                      show version info
   status                       show daemon status
   checklist                    check system requirements and status
-  init --domain D --cloudflare-api-token T --tunnel-name N [--account-id ID]
+  init --cloudflare-api-token T --tunnel-name N [--default-domain D] [--account-id ID]
   service add --name --image --port [--hostname h] [--env K=V] [--env-file .env]
                [--mem MB] [--volume host:container] [--healthcheck "CMD ..."]
   service list                 list all services
@@ -118,10 +118,10 @@ func cmdInit(args []string) error {
 	var domain, apiToken, tunnelName, accountID string
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
-		case "--domain":
+		case "--default-domain":
 			i++
 			if i >= len(args) {
-				return fmt.Errorf("--domain requires a value")
+				return fmt.Errorf("--default-domain requires a value")
 			}
 			domain = args[i]
 		case "--cloudflare-api-token":
@@ -147,8 +147,8 @@ func cmdInit(args []string) error {
 		}
 	}
 
-	if domain == "" || apiToken == "" || tunnelName == "" {
-		return fmt.Errorf("--domain, --cloudflare-api-token, and --tunnel-name are required")
+	if apiToken == "" || tunnelName == "" {
+		return fmt.Errorf("--cloudflare-api-token and --tunnel-name are required")
 	}
 
 	payload := map[string]any{
