@@ -18,6 +18,13 @@ import (
 )
 
 func main() {
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "version", "--version", "-v":
+			fmt.Println(version.String())
+			return
+		}
+	}
 	if err := run(); err != nil {
 		log.Fatalf("tinyserved exited: %v", err)
 	}

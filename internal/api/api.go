@@ -19,6 +19,7 @@ import (
 	"tinyserve/internal/docker"
 	"tinyserve/internal/generate"
 	"tinyserve/internal/state"
+	"tinyserve/internal/version"
 )
 
 type Handler struct {
@@ -43,6 +44,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	authMw := NewAuthMiddleware(h.Store)
 
 	mux.HandleFunc("/status", h.handleStatus)
+	mux.HandleFunc("/version", h.handleVersion)
 	mux.HandleFunc("/services", h.handleServicesWithAuth(authMw))
 	mux.HandleFunc("/services/", authMw.RequireToken(h.handleServiceByName)) // DELETE /services/{name}
 	mux.HandleFunc("/deploy", authMw.RequireToken(h.handleDeploy))
@@ -1108,4 +1110,16 @@ func (h *Handler) handleRemoteDisable(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, map[string]any{"status": "disabled"})
+}
+
+func (h *Handler) handleVersion(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	writeJSON(w, map[string]any{
+		"version": version.Version,
+		"commit":  version.Commit,
+		"date":    version.Date,
+	})
 }

@@ -931,9 +931,72 @@ func cmdLaunchdStatus() error {
 	} else {
 		fmt.Println("✗ NOT RUNNING")
 		fmt.Println("  Check logs: cat /tmp/tinyserved.err")
+		return nil
+	}
+
+	// Version comparison
+	fmt.Print("Version....................... ")
+	runningVersion, installedVersion := getDaemonVersions()
+	if runningVersion == "" {
+		fmt.Println("? (cannot get running version)")
+	} else if installedVersion == "" {
+		fmt.Printf("%s (cannot get installed version)\n", runningVersion)
+	} else if runningVersion == installedVersion {
+		fmt.Printf("✓ %s\n", runningVersion)
+	} else {
+		fmt.Printf("✗ MISMATCH\n")
+		fmt.Printf("  Running:   %s\n", runningVersion)
+		fmt.Printf("  Installed: %s\n", installedVersion)
+		fmt.Println("  Hint: run 'tinyserve launchd install' to restart with new version")
 	}
 
 	return nil
+}
+
+func getDaemonVersions() (running, installed string) {
+	// Get running daemon version via API
+	resp, err := http.Get(apiBase() + "/version")
+	if err == nil {
+		defer resp.Body.Close()
+		if resp.StatusCode == http.StatusOK {
+			var v struct {
+				Version string `json:"version"`
+			}
+			if json.NewDecoder(resp.Body).Decode(&v) == nil {
+				running = v.Version
+			}
+		}
+	}
+
+	// Get installed binary version
+	tinyservedPath, err := exec.LookPath("tinyserved")
+	if err != nil {
+		candidates := []string{
+			"/opt/homebrew/bin/tinyserved",
+			"/usr/local/bin/tinyserved",
+			os.ExpandEnv("$HOME/go/bin/tinyserved"),
+		}
+		for _, p := range candidates {
+			if _, err := os.Stat(p); err == nil {
+				tinyservedPath = p
+				break
+			}
+		}
+	}
+	if tinyservedPath != "" {
+		cmd := exec.Command(tinyservedPath, "--version")
+		out, err := cmd.Output()
+		if err == nil {
+			// Output format: "tinyserve VERSION (COMMIT) built DATE OS/ARCH"
+			// Extract just the version
+			parts := strings.Fields(strings.TrimSpace(string(out)))
+			if len(parts) >= 2 {
+				installed = parts[1]
+			}
+		}
+	}
+
+	return running, installed
 }
 
 func wrapConnError(err error) error {
