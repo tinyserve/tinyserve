@@ -1,6 +1,8 @@
-# tinyserve
+# TinyServe
 
-Local host manager for a single Mac mini running small Docker services. The daemon stays on `127.0.0.1`, fronts everything through Traefik and Cloudflare Tunnel, and keeps all generated state under `~/Library/Application Support/tinyserve/`.
+Host your project from home.
+
+TinyServe is a local host manager targeted for a single Mac mini running small Docker services. The daemon stays on `127.0.0.1`, fronts everything through Traefik and Cloudflare Tunnel, and keeps all generated state under `~/Library/Application Support/tinyserve/`.
 
 ## Project layout
 

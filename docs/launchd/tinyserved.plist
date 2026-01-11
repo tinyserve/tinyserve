@@ -4,19 +4,44 @@
 <dict>
   <key>Label</key>
   <string>dev.tinyserve.daemon</string>
+
   <key>ProgramArguments</key>
   <array>
-    <string>/usr/local/bin/tinyserved</string>
+    <!-- Update this path to match your installation -->
+    <!-- Homebrew Intel: /usr/local/bin/tinyserved -->
+    <!-- Homebrew Apple Silicon: /opt/homebrew/bin/tinyserved -->
+    <!-- Manual build: ~/go/bin/tinyserved or custom path -->
+    <string>/opt/homebrew/bin/tinyserved</string>
   </array>
-  <key>WorkingDirectory</key>
-  <string>$HOME/Library/Application Support/tinyserve</string>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>TINYSERVE_API</key>
+    <string>http://127.0.0.1:7070</string>
+    <!-- Uncomment and set your PATH if Docker CLI is not found -->
+    <!-- <key>PATH</key> -->
+    <!-- <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string> -->
+  </dict>
+
   <key>RunAtLoad</key>
   <true/>
+
   <key>KeepAlive</key>
-  <true/>
+  <dict>
+    <key>SuccessfulExit</key>
+    <false/>
+  </dict>
+
+  <key>ThrottleInterval</key>
+  <integer>10</integer>
+
   <key>StandardOutPath</key>
-  <string>$HOME/Library/Application Support/tinyserve/logs/tinyserved.log</string>
+  <string>/tmp/tinyserved.log</string>
+
   <key>StandardErrorPath</key>
-  <string>$HOME/Library/Application Support/tinyserve/logs/tinyserved.err</string>
+  <string>/tmp/tinyserved.err</string>
+
+  <key>ProcessType</key>
+  <string>Background</string>
 </dict>
 </plist>

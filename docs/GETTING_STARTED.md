@@ -28,11 +28,11 @@ This assumes you want to install tinyserve via Homebrew, have a Docker runtime r
   - Verify Docker + compose availability.
 
 ## 2b) Optional: custom domain via reverse proxy + port forward (no Cloudflare Tunnel)
-If you don’t want Cloudflare Tunnel, you can expose tinyserve directly:
+If you don't want Cloudflare Tunnel, you can expose tinyserve directly:
 - Point DNS A/AAAA records at your public IP.
 - Forward ports 80/443 on your router to this Mac mini.
 - Allow inbound 80/443 on your firewall.
-- Use a reverse proxy (Traefik/Caddy/Nginx) to terminate TLS with Let’s Encrypt.
+- Use a reverse proxy (Traefik/Caddy/Nginx) to terminate TLS with Let's Encrypt.
 - Use Dynamic DNS if your public IP changes.
 
 ## 3) Add a service
@@ -58,6 +58,7 @@ If you don’t want Cloudflare Tunnel, you can expose tinyserve directly:
 - Browser: `https://whoami.example.com` (optionally behind Cloudflare Access).
 
 ## 6) Keep it running
-- Load the LaunchAgent if you haven’t: `launchctl load ~/Library/LaunchAgents/dev.tinyserve.daemon.plist`
-- Future updates: `brew upgrade tinyserve`
-- Add/remove services or redeploy via the CLI or (when available) the web UI. 
+- Install the launchd agent: `tinyserve launchd install`
+- Check status: `tinyserve launchd status`
+- Future updates: `brew upgrade tinyserve && tinyserve launchd uninstall && tinyserve launchd install`
+- Add/remove services or redeploy via the CLI or (when available) the web UI.

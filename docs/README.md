@@ -7,7 +7,9 @@ Operational documentation for tinyserve.
 - [PREPARE_ENVIRONMENT.md](PREPARE_ENVIRONMENT.md) - Initial Mac mini setup (Docker, firewall, etc.)
 - [GETTING_STARTED.md](GETTING_STARTED.md) - First-time tinyserve setup with Cloudflare Tunnel
 - [ADD_NEW_SERVICE.md](ADD_NEW_SERVICE.md) - Adding and managing services
-- [launchd/](launchd/) - LaunchAgent plist for running daemon as a user service
+- [LAUNCHD.md](LAUNCHD.md) - Installing and managing tinyserved as a LaunchAgent
+- [BACKUP_RESTORE.md](BACKUP_RESTORE.md) - Backup and restore procedures
+- [launchd/](launchd/) - LaunchAgent plist template
 
 ## Architecture
 

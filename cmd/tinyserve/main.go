@@ -43,6 +43,8 @@ func main() {
 		err = cmdRollback()
 	case "checklist":
 		err = cmdChecklist()
+	case "launchd":
+		err = cmdLaunchd(os.Args[2:])
 	default:
 		usage()
 		return
@@ -97,6 +99,9 @@ commands:
   deploy [--service NAME] [--timeout SEC]  pull, restart, and wait for health
   logs --service NAME [--tail N] [--follow]
   rollback                     restore last backup
+  launchd install              install and load launchd agent
+  launchd uninstall            unload and remove launchd agent
+  launchd status               show launchd agent status
 `)
 }
 
@@ -645,6 +650,201 @@ func cmdChecklist() error {
 	fmt.Println("• Daemon: Run 'tinyserved' or load the launchd agent")
 	fmt.Println("• Launchd: cp docs/launchd/tinyserved.plist ~/Library/LaunchAgents/dev.tinyserve.daemon.plist")
 	fmt.Println("           launchctl load ~/Library/LaunchAgents/dev.tinyserve.daemon.plist")
+	return nil
+}
+
+func cmdLaunchd(args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("usage: tinyserve launchd <install|uninstall|status>")
+	}
+	switch args[0] {
+	case "install":
+		return cmdLaunchdInstall()
+	case "uninstall":
+		return cmdLaunchdUninstall()
+	case "status":
+		return cmdLaunchdStatus()
+	default:
+		return fmt.Errorf("unknown launchd subcommand: %s", args[0])
+	}
+}
+
+const launchdLabel = "dev.tinyserve.daemon"
+
+func launchdPlistPath() string {
+	return os.ExpandEnv("$HOME/Library/LaunchAgents/dev.tinyserve.daemon.plist")
+}
+
+func cmdLaunchdInstall() error {
+	plistPath := launchdPlistPath()
+
+	// Find the tinyserved binary path
+	tinyservedPath, err := exec.LookPath("tinyserved")
+	if err != nil {
+		// Try common locations
+		candidates := []string{
+			"/opt/homebrew/bin/tinyserved",
+			"/usr/local/bin/tinyserved",
+			os.ExpandEnv("$HOME/go/bin/tinyserved"),
+		}
+		for _, p := range candidates {
+			if _, err := os.Stat(p); err == nil {
+				tinyservedPath = p
+				break
+			}
+		}
+		if tinyservedPath == "" {
+			return fmt.Errorf("tinyserved not found in PATH or common locations")
+		}
+	}
+
+	// Ensure LaunchAgents directory exists
+	launchAgentsDir := os.ExpandEnv("$HOME/Library/LaunchAgents")
+	if err := os.MkdirAll(launchAgentsDir, 0755); err != nil {
+		return fmt.Errorf("create LaunchAgents dir: %w", err)
+	}
+
+	// Generate plist content
+	plistContent := fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple Computer//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>%s</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>%s</string>
+  </array>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>TINYSERVE_API</key>
+    <string>http://127.0.0.1:7070</string>
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+  </dict>
+
+  <key>RunAtLoad</key>
+  <true/>
+
+  <key>KeepAlive</key>
+  <dict>
+    <key>SuccessfulExit</key>
+    <false/>
+  </dict>
+
+  <key>ThrottleInterval</key>
+  <integer>10</integer>
+
+  <key>StandardOutPath</key>
+  <string>/tmp/tinyserved.log</string>
+
+  <key>StandardErrorPath</key>
+  <string>/tmp/tinyserved.err</string>
+
+  <key>ProcessType</key>
+  <string>Background</string>
+</dict>
+</plist>
+`, launchdLabel, tinyservedPath)
+
+	// Check if already installed
+	if _, err := os.Stat(plistPath); err == nil {
+		// Unload first if exists
+		exec.Command("launchctl", "unload", plistPath).Run()
+	}
+
+	// Write plist
+	if err := os.WriteFile(plistPath, []byte(plistContent), 0644); err != nil {
+		return fmt.Errorf("write plist: %w", err)
+	}
+
+	// Load the agent
+	cmd := exec.Command("launchctl", "load", plistPath)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("launchctl load: %w\n%s", err, output)
+	}
+
+	fmt.Printf("✓ Installed launchd agent\n")
+	fmt.Printf("  Binary: %s\n", tinyservedPath)
+	fmt.Printf("  Plist:  %s\n", plistPath)
+	fmt.Printf("  Logs:   /tmp/tinyserved.log, /tmp/tinyserved.err\n")
+	return nil
+}
+
+func cmdLaunchdUninstall() error {
+	plistPath := launchdPlistPath()
+
+	if _, err := os.Stat(plistPath); os.IsNotExist(err) {
+		return fmt.Errorf("launchd agent not installed (no plist at %s)", plistPath)
+	}
+
+	// Unload the agent
+	cmd := exec.Command("launchctl", "unload", plistPath)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: launchctl unload: %s\n", output)
+	}
+
+	// Remove the plist
+	if err := os.Remove(plistPath); err != nil {
+		return fmt.Errorf("remove plist: %w", err)
+	}
+
+	fmt.Println("✓ Uninstalled launchd agent")
+	return nil
+}
+
+func cmdLaunchdStatus() error {
+	plistPath := launchdPlistPath()
+
+	// Check plist exists
+	fmt.Print("Plist installed............... ")
+	if _, err := os.Stat(plistPath); err != nil {
+		fmt.Println("✗ NOT FOUND")
+		fmt.Printf("  Expected: %s\n", plistPath)
+		return nil
+	}
+	fmt.Println("✓")
+
+	// Check if loaded
+	fmt.Print("Agent loaded.................. ")
+	cmd := exec.Command("launchctl", "list")
+	output, err := cmd.Output()
+	if err != nil {
+		fmt.Println("? (launchctl error)")
+		return nil
+	}
+
+	loaded := false
+	var pid string
+	for _, line := range strings.Split(string(output), "\n") {
+		if strings.Contains(line, launchdLabel) {
+			loaded = true
+			fields := strings.Fields(line)
+			if len(fields) >= 1 && fields[0] != "-" {
+				pid = fields[0]
+			}
+			break
+		}
+	}
+
+	if !loaded {
+		fmt.Println("✗ NOT LOADED")
+		fmt.Println("  Run: launchctl load " + plistPath)
+		return nil
+	}
+	fmt.Println("✓")
+
+	// Check if running
+	fmt.Print("Daemon running................ ")
+	if pid != "" && pid != "0" {
+		fmt.Printf("✓ (PID %s)\n", pid)
+	} else {
+		fmt.Println("✗ NOT RUNNING")
+		fmt.Println("  Check logs: cat /tmp/tinyserved.err")
+	}
+
 	return nil
 }
 
