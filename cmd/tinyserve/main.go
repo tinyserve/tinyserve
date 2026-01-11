@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
 	"fmt"
@@ -9,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -93,7 +95,8 @@ commands:
   version                      show version info
   status                       show daemon status
   checklist                    check system requirements and status
-  init --cloudflare-api-token T --tunnel-name N [--default-domain D] [--account-id ID]
+  init                           interactive setup wizard
+       [--cloudflare-api-token T] [--default-domain D] [--tunnel-name N] [--account-id ID] [--skip-cloudflare]
   service add --name --image --port [--hostname h] [--env K=V] [--env-file .env]
                [--mem MB] [--volume host:container] [--healthcheck "CMD ..."]
   service list                 list all services
@@ -106,7 +109,7 @@ commands:
   launchd status               show launchd agent status
 
 remote:
-  remote enable --hostname H   enable remote access via Cloudflare Tunnel
+  remote enable --hostname H   enable remote API and web UI via Cloudflare Tunnel
   remote disable               disable remote access
   remote token create [--name] create a deploy token
   remote token list            list all tokens
@@ -116,6 +119,9 @@ remote:
 
 func cmdInit(args []string) error {
 	var domain, apiToken, tunnelName, accountID string
+	var skipCloudflare bool
+
+	// Parse flags
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
 		case "--default-domain":
@@ -142,14 +148,89 @@ func cmdInit(args []string) error {
 				return fmt.Errorf("--account-id requires a value")
 			}
 			accountID = args[i]
+		case "--skip-cloudflare":
+			skipCloudflare = true
 		default:
 			return fmt.Errorf("unknown flag: %s", args[i])
 		}
 	}
 
-	if apiToken == "" || tunnelName == "" {
-		return fmt.Errorf("--cloudflare-api-token and --tunnel-name are required")
+	reader := bufio.NewReader(os.Stdin)
+
+	// Interactive mode if no flags provided
+	if apiToken == "" && !skipCloudflare {
+		fmt.Println("Welcome to TinyServe setup!")
+		fmt.Println()
+		fmt.Println("TinyServe can expose your services to the internet using Cloudflare Tunnel.")
+		fmt.Println("This requires a free Cloudflare account with a domain.")
+		fmt.Println()
+		fmt.Print("Enable Cloudflare integration? [Y/n]: ")
+
+		answer, _ := reader.ReadString('\n')
+		answer = strings.TrimSpace(strings.ToLower(answer))
+
+		if answer == "n" || answer == "no" {
+			skipCloudflare = true
+		}
 	}
+
+	if skipCloudflare {
+		fmt.Println()
+		fmt.Println("Skipping Cloudflare integration.")
+		fmt.Println("You can enable it later with: tinyserve init --cloudflare-api-token TOKEN")
+		fmt.Println()
+		fmt.Println("TinyServe is ready for local use!")
+		return nil
+	}
+
+	// Get API token interactively if not provided
+	if apiToken == "" {
+		fmt.Println()
+		fmt.Println("To create a Cloudflare API token:")
+		fmt.Println("  1. Go to: https://dash.cloudflare.com/profile/api-tokens")
+		fmt.Println("  2. Click 'Create Token'")
+		fmt.Println("  3. Use 'Edit zone DNS' template or create custom with:")
+		fmt.Println("     - Account > Cloudflare Tunnel > Edit")
+		fmt.Println("     - Zone > DNS > Edit")
+		fmt.Println()
+		fmt.Print("Open browser to create token? [Y/n]: ")
+
+		answer, _ := reader.ReadString('\n')
+		answer = strings.TrimSpace(strings.ToLower(answer))
+
+		if answer != "n" && answer != "no" {
+			openBrowser("https://dash.cloudflare.com/profile/api-tokens")
+		}
+
+		fmt.Println()
+		fmt.Print("Paste your Cloudflare API token: ")
+		tokenInput, _ := reader.ReadString('\n')
+		apiToken = strings.TrimSpace(tokenInput)
+
+		if apiToken == "" {
+			return fmt.Errorf("API token is required for Cloudflare integration")
+		}
+	}
+
+	// Ask for default domain interactively
+	if domain == "" {
+		fmt.Println()
+		fmt.Print("Default domain for services (optional, press Enter to skip): ")
+		domainInput, _ := reader.ReadString('\n')
+		domain = strings.TrimSpace(domainInput)
+	}
+
+	// Auto-generate tunnel name from hostname if not provided
+	if tunnelName == "" {
+		hostname, err := os.Hostname()
+		if err != nil {
+			hostname = "tinyserve"
+		}
+		tunnelName = "tinyserve-" + hostname
+	}
+
+	fmt.Println()
+	fmt.Printf("Creating tunnel '%s'...\n", tunnelName)
 
 	payload := map[string]any{
 		"domain":      domain,
@@ -656,9 +737,7 @@ func cmdChecklist() error {
 	fmt.Println("Some checks failed. See hints below:")
 	fmt.Println("")
 	fmt.Println("• Docker: Install from https://docker.com/products/docker-desktop")
-	fmt.Println("• Daemon: Run 'tinyserved' or load the launchd agent")
-	fmt.Println("• Launchd: cp docs/launchd/tinyserved.plist ~/Library/LaunchAgents/dev.tinyserve.daemon.plist")
-	fmt.Println("           launchctl load ~/Library/LaunchAgents/dev.tinyserve.daemon.plist")
+	fmt.Println("• Launchd: Run 'tinyserve launchd install' to install and start the daemon (recommended)")
 	return nil
 }
 
@@ -868,6 +947,21 @@ func wrapConnError(err error) error {
 		return fmt.Errorf("%w\n\nHint: Is the daemon running? Start it with:\n  tinyserved\n\nOr check status with:\n  launchctl list | grep tinyserve", err)
 	}
 	return err
+}
+
+func openBrowser(url string) {
+	var cmd *exec.Cmd
+	switch runtime.GOOS {
+	case "darwin":
+		cmd = exec.Command("open", url)
+	case "linux":
+		cmd = exec.Command("xdg-open", url)
+	case "windows":
+		cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", url)
+	default:
+		return
+	}
+	_ = cmd.Start()
 }
 
 func cmdRemote(args []string) error {

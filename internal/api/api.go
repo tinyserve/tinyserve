@@ -475,9 +475,18 @@ func (h *Handler) handleInit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if req.APIToken == "" || req.TunnelName == "" {
-		http.Error(w, "api_token and tunnel_name are required", http.StatusBadRequest)
+	if req.APIToken == "" {
+		http.Error(w, "api_token is required", http.StatusBadRequest)
 		return
+	}
+
+	// Auto-generate tunnel name from hostname if not provided
+	if req.TunnelName == "" {
+		hostname, _ := os.Hostname()
+		if hostname == "" {
+			hostname = "tinyserve"
+		}
+		req.TunnelName = "tinyserve-" + hostname
 	}
 
 	ctx := r.Context()
