@@ -45,6 +45,8 @@ func main() {
 		err = cmdChecklist()
 	case "launchd":
 		err = cmdLaunchd(os.Args[2:])
+	case "remote":
+		err = cmdRemote(os.Args[2:])
 	default:
 		usage()
 		return
@@ -102,6 +104,13 @@ commands:
   launchd install              install and load launchd agent
   launchd uninstall            unload and remove launchd agent
   launchd status               show launchd agent status
+
+remote:
+  remote enable --hostname H   enable remote access via Cloudflare Tunnel
+  remote disable               disable remote access
+  remote token create [--name] create a deploy token
+  remote token list            list all tokens
+  remote token revoke <id>     revoke a token
 `)
 }
 
@@ -859,4 +868,215 @@ func wrapConnError(err error) error {
 		return fmt.Errorf("%w\n\nHint: Is the daemon running? Start it with:\n  tinyserved\n\nOr check status with:\n  launchctl list | grep tinyserve", err)
 	}
 	return err
+}
+
+func cmdRemote(args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("usage: tinyserve remote <enable|disable|token> ...")
+	}
+	switch args[0] {
+	case "enable":
+		return cmdRemoteEnable(args[1:])
+	case "disable":
+		return cmdRemoteDisable()
+	case "token":
+		return cmdRemoteToken(args[1:])
+	default:
+		return fmt.Errorf("unknown remote subcommand: %s", args[0])
+	}
+}
+
+func cmdRemoteEnable(args []string) error {
+	var hostname string
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--hostname":
+			i++
+			if i >= len(args) {
+				return fmt.Errorf("--hostname requires a value")
+			}
+			hostname = args[i]
+		default:
+			return fmt.Errorf("unknown flag: %s", args[i])
+		}
+	}
+	if hostname == "" {
+		return fmt.Errorf("--hostname is required")
+	}
+
+	payload := map[string]any{
+		"enabled":  true,
+		"hostname": hostname,
+	}
+	body, _ := json.Marshal(payload)
+	req, err := http.NewRequest(http.MethodPost, apiBase()+"/remote/enable", bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return wrapConnError(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		data, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("enable remote failed: %s (%s)", resp.Status, strings.TrimSpace(string(data)))
+	}
+	fmt.Printf("✓ Remote access enabled at %s\n", hostname)
+	fmt.Println("  Note: DNS and tunnel routing must be configured separately")
+	return nil
+}
+
+func cmdRemoteDisable() error {
+	req, err := http.NewRequest(http.MethodPost, apiBase()+"/remote/disable", nil)
+	if err != nil {
+		return err
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return wrapConnError(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		data, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("disable remote failed: %s (%s)", resp.Status, strings.TrimSpace(string(data)))
+	}
+	fmt.Println("✓ Remote access disabled")
+	return nil
+}
+
+func cmdRemoteToken(args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("usage: tinyserve remote token <create|list|revoke> ...")
+	}
+	switch args[0] {
+	case "create":
+		return cmdRemoteTokenCreate(args[1:])
+	case "list":
+		return cmdRemoteTokenList()
+	case "revoke":
+		return cmdRemoteTokenRevoke(args[1:])
+	default:
+		return fmt.Errorf("unknown token subcommand: %s", args[0])
+	}
+}
+
+func cmdRemoteTokenCreate(args []string) error {
+	var name string
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--name":
+			i++
+			if i >= len(args) {
+				return fmt.Errorf("--name requires a value")
+			}
+			name = args[i]
+		default:
+			return fmt.Errorf("unknown flag: %s", args[i])
+		}
+	}
+
+	payload := map[string]any{}
+	if name != "" {
+		payload["name"] = name
+	}
+	body, _ := json.Marshal(payload)
+	req, err := http.NewRequest(http.MethodPost, apiBase()+"/tokens", bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return wrapConnError(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		data, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("create token failed: %s (%s)", resp.Status, strings.TrimSpace(string(data)))
+	}
+
+	var result map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return err
+	}
+
+	fmt.Printf("Token created: %s\n", result["token"])
+	fmt.Printf("ID: %s\n", result["id"])
+	if n, ok := result["name"].(string); ok && n != "" {
+		fmt.Printf("Name: %s\n", n)
+	}
+	fmt.Println("\n⚠️  Store this token securely - it won't be shown again")
+	return nil
+}
+
+func cmdRemoteTokenList() error {
+	resp, err := http.Get(apiBase() + "/tokens")
+	if err != nil {
+		return wrapConnError(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		data, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("list tokens failed: %s (%s)", resp.Status, strings.TrimSpace(string(data)))
+	}
+
+	var tokens []map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&tokens); err != nil {
+		return err
+	}
+
+	if len(tokens) == 0 {
+		fmt.Println("No tokens configured")
+		return nil
+	}
+
+	fmt.Printf("%-18s %-20s %-24s %-24s\n", "ID", "NAME", "CREATED", "LAST USED")
+	fmt.Println(strings.Repeat("-", 90))
+	for _, t := range tokens {
+		id, _ := t["id"].(string)
+		name, _ := t["name"].(string)
+		createdAt, _ := t["created_at"].(string)
+		lastUsed, _ := t["last_used"].(string)
+		if lastUsed == "" {
+			lastUsed = "never"
+		}
+		fmt.Printf("%-18s %-20s %-24s %-24s\n", id, name, formatTime(createdAt), formatTime(lastUsed))
+	}
+	return nil
+}
+
+func formatTime(ts string) string {
+	if ts == "" || ts == "never" {
+		return ts
+	}
+	t, err := time.Parse(time.RFC3339, ts)
+	if err != nil {
+		return ts
+	}
+	return t.Local().Format("2006-01-02 15:04:05")
+}
+
+func cmdRemoteTokenRevoke(args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("usage: tinyserve remote token revoke <token-id>")
+	}
+	tokenID := args[0]
+
+	req, err := http.NewRequest(http.MethodDelete, apiBase()+"/tokens/"+url.PathEscape(tokenID), nil)
+	if err != nil {
+		return err
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return wrapConnError(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		data, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("revoke token failed: %s (%s)", resp.Status, strings.TrimSpace(string(data)))
+	}
+	fmt.Printf("✓ Token %s revoked\n", tokenID)
+	return nil
 }

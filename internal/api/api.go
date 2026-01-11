@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"tinyserve/internal/auth"
 	"tinyserve/internal/cloudflare"
 	"tinyserve/internal/docker"
 	"tinyserve/internal/generate"
@@ -39,14 +40,32 @@ func NewHandler(store state.Store, generatedRoot, backupsDir, statePath, cloudfl
 }
 
 func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
+	authMw := NewAuthMiddleware(h.Store)
+
 	mux.HandleFunc("/status", h.handleStatus)
-	mux.HandleFunc("/services", h.handleServices)
-	mux.HandleFunc("/services/", h.handleServiceByName) // DELETE /services/{name}
-	mux.HandleFunc("/deploy", h.handleDeploy)
-	mux.HandleFunc("/rollback", h.handleRollback)
+	mux.HandleFunc("/services", h.handleServicesWithAuth(authMw))
+	mux.HandleFunc("/services/", authMw.RequireToken(h.handleServiceByName)) // DELETE /services/{name}
+	mux.HandleFunc("/deploy", authMw.RequireToken(h.handleDeploy))
+	mux.HandleFunc("/rollback", authMw.RequireToken(h.handleRollback))
 	mux.HandleFunc("/logs", h.handleLogs)
-	mux.HandleFunc("/init", h.handleInit)
+	mux.HandleFunc("/init", authMw.RequireToken(h.handleInit))
 	mux.HandleFunc("/health", h.handleHealth)
+
+	mux.HandleFunc("/tokens", h.handleTokens)
+	mux.HandleFunc("/tokens/", h.handleTokenByID)
+
+	mux.HandleFunc("/remote/enable", h.handleRemoteEnable)
+	mux.HandleFunc("/remote/disable", h.handleRemoteDisable)
+}
+
+func (h *Handler) handleServicesWithAuth(authMw *AuthMiddleware) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			authMw.RequireToken(h.handleServices)(w, r)
+		} else {
+			h.handleServices(w, r)
+		}
+	}
 }
 
 func (h *Handler) handleStatus(w http.ResponseWriter, r *http.Request) {
@@ -872,4 +891,212 @@ func (h *Handler) handleHealth(w http.ResponseWriter, r *http.Request) {
 	result["healthy"] = allHealthy
 
 	writeJSON(w, result)
+}
+
+type createTokenRequest struct {
+	Name string `json:"name"`
+}
+
+type tokenResponse struct {
+	ID        string     `json:"id"`
+	Name      string     `json:"name"`
+	CreatedAt time.Time  `json:"created_at"`
+	LastUsed  *time.Time `json:"last_used,omitempty"`
+}
+
+func (h *Handler) handleTokens(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		h.handleListTokens(w, r)
+	case http.MethodPost:
+		h.handleCreateToken(w, r)
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func (h *Handler) handleListTokens(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	st, err := h.Store.Load(ctx)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("load state: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	tokens := make([]tokenResponse, 0, len(st.Tokens))
+	for _, t := range st.Tokens {
+		tokens = append(tokens, tokenResponse{
+			ID:        t.ID,
+			Name:      t.Name,
+			CreatedAt: t.CreatedAt,
+			LastUsed:  t.LastUsed,
+		})
+	}
+	writeJSON(w, tokens)
+}
+
+func (h *Handler) handleCreateToken(w http.ResponseWriter, r *http.Request) {
+	var req createTokenRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid JSON", http.StatusBadRequest)
+		return
+	}
+
+	if req.Name == "" {
+		req.Name = "unnamed"
+	}
+
+	plaintext, err := auth.GenerateToken()
+	if err != nil {
+		http.Error(w, fmt.Sprintf("generate token: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	hash, err := auth.HashToken(plaintext)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("hash token: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	token := state.APIToken{
+		ID:        auth.GenerateTokenID(),
+		Name:      req.Name,
+		Hash:      hash,
+		CreatedAt: time.Now().UTC(),
+	}
+
+	ctx := r.Context()
+	st, err := h.Store.Load(ctx)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("load state: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	st.Tokens = append(st.Tokens, token)
+	if err := h.Store.Save(ctx, st); err != nil {
+		http.Error(w, fmt.Sprintf("save state: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	writeJSON(w, map[string]any{
+		"id":         token.ID,
+		"name":       token.Name,
+		"token":      plaintext,
+		"created_at": token.CreatedAt,
+		"message":    "Store this token securely - it won't be shown again",
+	})
+}
+
+func (h *Handler) handleTokenByID(w http.ResponseWriter, r *http.Request) {
+	id := strings.TrimPrefix(r.URL.Path, "/tokens/")
+	if id == "" {
+		http.Error(w, "token ID required", http.StatusBadRequest)
+		return
+	}
+
+	switch r.Method {
+	case http.MethodDelete:
+		h.handleRevokeToken(w, r, id)
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func (h *Handler) handleRevokeToken(w http.ResponseWriter, r *http.Request, id string) {
+	ctx := r.Context()
+	st, err := h.Store.Load(ctx)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("load state: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	found := false
+	var newTokens []state.APIToken
+	for _, t := range st.Tokens {
+		if t.ID == id {
+			found = true
+			continue
+		}
+		newTokens = append(newTokens, t)
+	}
+
+	if !found {
+		http.Error(w, fmt.Sprintf("token %q not found", id), http.StatusNotFound)
+		return
+	}
+
+	st.Tokens = newTokens
+	if err := h.Store.Save(ctx, st); err != nil {
+		http.Error(w, fmt.Sprintf("save state: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	writeJSON(w, map[string]any{"status": "revoked", "id": id})
+}
+
+type remoteEnableRequest struct {
+	Enabled  bool   `json:"enabled"`
+	Hostname string `json:"hostname"`
+}
+
+func (h *Handler) handleRemoteEnable(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req remoteEnableRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid JSON", http.StatusBadRequest)
+		return
+	}
+
+	if req.Hostname == "" {
+		http.Error(w, "hostname is required", http.StatusBadRequest)
+		return
+	}
+
+	ctx := r.Context()
+	st, err := h.Store.Load(ctx)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("load state: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	st.Settings.Remote.Enabled = true
+	st.Settings.Remote.Hostname = req.Hostname
+
+	if err := h.Store.Save(ctx, st); err != nil {
+		http.Error(w, fmt.Sprintf("save state: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	writeJSON(w, map[string]any{
+		"status":   "enabled",
+		"hostname": req.Hostname,
+	})
+}
+
+func (h *Handler) handleRemoteDisable(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	ctx := r.Context()
+	st, err := h.Store.Load(ctx)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("load state: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	st.Settings.Remote.Enabled = false
+	st.Settings.Remote.Hostname = ""
+
+	if err := h.Store.Save(ctx, st); err != nil {
+		http.Error(w, fmt.Sprintf("save state: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	writeJSON(w, map[string]any{"status": "disabled"})
 }

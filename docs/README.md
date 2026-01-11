@@ -8,6 +8,7 @@ Operational documentation for tinyserve.
 - [GETTING_STARTED.md](GETTING_STARTED.md) - First-time tinyserve setup with Cloudflare Tunnel
 - [ADD_NEW_SERVICE.md](ADD_NEW_SERVICE.md) - Adding and managing services
 - [LAUNCHD.md](LAUNCHD.md) - Installing and managing tinyserved as a LaunchAgent
+- [REMOTE.md](REMOTE.md) - Remote access, webhooks, and authentication
 - [BACKUP_RESTORE.md](BACKUP_RESTORE.md) - Backup and restore procedures
 - [launchd/](launchd/) - LaunchAgent plist template
 

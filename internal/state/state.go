@@ -23,12 +23,18 @@ type TunnelSettings struct {
 	AccountID       string     `json:"account_id,omitempty"`
 }
 
+type RemoteSettings struct {
+	Enabled  bool   `json:"enabled"`
+	Hostname string `json:"hostname,omitempty"`
+}
+
 type GlobalSettings struct {
 	ComposeProjectName string         `json:"compose_project_name"`
 	DefaultDomain      string         `json:"default_domain,omitempty"`
 	Tunnel             TunnelSettings `json:"tunnel"`
 	UILocalPort        int            `json:"ui_local_port"`
 	MaxBackups         int            `json:"max_backups,omitempty"` // default 10
+	Remote             RemoteSettings `json:"remote,omitempty"`
 }
 
 type ServiceResources struct {
@@ -61,9 +67,18 @@ type Service struct {
 
 const ServiceTypeRegistryImage = "registry-image"
 
+type APIToken struct {
+	ID        string     `json:"id"`
+	Name      string     `json:"name"`
+	Hash      string     `json:"hash"`
+	CreatedAt time.Time  `json:"created_at"`
+	LastUsed  *time.Time `json:"last_used,omitempty"`
+}
+
 type State struct {
 	Settings  GlobalSettings `json:"settings"`
 	Services  []Service      `json:"services"`
+	Tokens    []APIToken     `json:"tokens,omitempty"`
 	CreatedAt time.Time      `json:"created_at"`
 	UpdatedAt time.Time      `json:"updated_at"`
 }
