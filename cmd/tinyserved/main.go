@@ -60,10 +60,11 @@ func run() error {
 	backupsDir := filepath.Join(dataDir, "backups")
 	cloudflaredDir := filepath.Join(dataDir, "cloudflared")
 
+	browserAuth := api.NewBrowserAuthMiddleware(store)
 	handler := api.NewHandler(store, generatedRoot, backupsDir, filepath.Join(dataDir, "state.db"), cloudflaredDir)
 	mux := http.NewServeMux()
-	handler.RegisterRoutes(mux)
-	mux.Handle("/", webui.Handler())
+	handler.RegisterRoutes(mux, browserAuth)
+	mux.Handle("/", browserAuth.Wrap(webui.Handler()))
 
 	server := &http.Server{
 		Addr:    "127.0.0.1:7070",

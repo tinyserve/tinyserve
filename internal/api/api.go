@@ -40,7 +40,7 @@ func NewHandler(store state.Store, generatedRoot, backupsDir, statePath, cloudfl
 	}
 }
 
-func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
+func (h *Handler) RegisterRoutes(mux *http.ServeMux, browserAuth *BrowserAuthMiddleware) {
 	authMw := NewAuthMiddleware(h.Store)
 
 	mux.HandleFunc("/status", h.handleStatus)
@@ -58,6 +58,29 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 
 	mux.HandleFunc("/remote/enable", h.handleRemoteEnable)
 	mux.HandleFunc("/remote/disable", h.handleRemoteDisable)
+
+	mux.Handle("/me", browserAuth.Wrap(http.HandlerFunc(h.handleMe)))
+}
+
+func (h *Handler) handleMe(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	user := auth.BrowserUserFromContext(r.Context())
+	if user == nil {
+		writeJSON(w, map[string]any{"authenticated": false})
+		return
+	}
+
+	writeJSON(w, map[string]any{
+		"authenticated": true,
+		"email":         user.Email,
+		"name":          user.Name,
+		"id":            user.ID,
+		"provider":      user.Provider,
+	})
 }
 
 func (h *Handler) handleServicesWithAuth(authMw *AuthMiddleware) http.HandlerFunc {

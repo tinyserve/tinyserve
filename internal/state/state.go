@@ -23,9 +23,16 @@ type TunnelSettings struct {
 	AccountID       string     `json:"account_id,omitempty"`
 }
 
+type BrowserAuthSettings struct {
+	Type       string `json:"type"`
+	TeamDomain string `json:"team_domain,omitempty"`
+	PolicyAUD  string `json:"policy_aud,omitempty"`
+}
+
 type RemoteSettings struct {
-	Enabled  bool   `json:"enabled"`
-	Hostname string `json:"hostname,omitempty"`
+	Enabled     bool                `json:"enabled"`
+	Hostname    string              `json:"hostname,omitempty"`
+	BrowserAuth BrowserAuthSettings `json:"browser_auth,omitempty"`
 }
 
 type GlobalSettings struct {

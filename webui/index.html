@@ -61,6 +61,20 @@
       gap: 10px;
       align-items: center;
     }
+    .user-info {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 12px;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: rgba(255,255,255,0.04);
+      font-size: 13px;
+      color: var(--muted);
+    }
+    .user-info .email {
+      color: var(--text);
+    }
     button {
       cursor: pointer;
       border: 1px solid var(--border);
@@ -164,6 +178,7 @@
         <p>Local Mac mini host — Traefik + cloudflared front door</p>
       </div>
       <div class="actions">
+        <div id="user-info" class="user-info" style="display: none;"></div>
         <button id="refresh">Refresh</button>
       </div>
     </header>
@@ -296,6 +311,22 @@
       if (entry.health && entry.health.toLowerCase() !== "healthy") return false;
       return entry.state.toLowerCase() === "running" || entry.state.toLowerCase() === "healthy";
     }
+
+    const userInfoEl = document.getElementById("user-info");
+
+    async function loadUserInfo() {
+      try {
+        const me = await fetchJSON("/me");
+        if (me.authenticated && me.email) {
+          userInfoEl.innerHTML = `<span class="email">${me.email}</span>`;
+          userInfoEl.style.display = "flex";
+        }
+      } catch (err) {
+        // Ignore - user info is optional
+      }
+    }
+
+    document.addEventListener("DOMContentLoaded", loadUserInfo);
   </script>
 </body>
 </html>

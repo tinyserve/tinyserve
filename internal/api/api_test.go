@@ -454,7 +454,8 @@ func TestMethodNotAllowed(t *testing.T) {
 	}
 
 	mux := http.NewServeMux()
-	h.RegisterRoutes(mux)
+	browserAuth := NewBrowserAuthMiddleware(state.NewInMemoryStore(state.NewState()))
+	h.RegisterRoutes(mux, browserAuth)
 
 	for _, tt := range tests {
 		t.Run(tt.method+" "+tt.path, func(t *testing.T) {
