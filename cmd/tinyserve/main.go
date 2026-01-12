@@ -705,17 +705,28 @@ func cmdChecklist() error {
 		}
 	}
 
-	// 4. Check launchd agent installed
+	// 4. Check launchd agent installed (CLI or brew services)
 	fmt.Print("launchd agent installed....... ")
-	plistPath := os.ExpandEnv("$HOME/Library/LaunchAgents/dev.tinyserve.daemon.plist")
-	if _, err := os.Stat(plistPath); err != nil {
+	cliPlistPath := os.ExpandEnv("$HOME/Library/LaunchAgents/dev.tinyserve.daemon.plist")
+	brewPlistPath := os.ExpandEnv("$HOME/Library/LaunchAgents/homebrew.mxcl.tinyserve.plist")
+	cliInstalled := false
+	brewInstalled := false
+	if _, err := os.Stat(cliPlistPath); err == nil {
+		cliInstalled = true
+	}
+	if _, err := os.Stat(brewPlistPath); err == nil {
+		brewInstalled = true
+	}
+	if cliInstalled {
+		fmt.Println("✓")
+	} else if brewInstalled {
+		fmt.Println("✓ (brew services)")
+	} else {
 		fmt.Println("✗ NOT INSTALLED")
 		allPassed = false
-	} else {
-		fmt.Println("✓")
 	}
 
-	// 5. Check launchd agent loaded
+	// 5. Check launchd agent loaded (CLI or brew services)
 	fmt.Print("launchd agent loaded.......... ")
 	cmd = exec.Command("launchctl", "list")
 	output, err := cmd.Output()
@@ -724,6 +735,8 @@ func cmdChecklist() error {
 		allPassed = false
 	} else if strings.Contains(string(output), "dev.tinyserve.daemon") {
 		fmt.Println("✓")
+	} else if strings.Contains(string(output), "homebrew.mxcl.tinyserve") {
+		fmt.Println("✓ (brew services)")
 	} else {
 		fmt.Println("✗ NOT LOADED")
 		allPassed = false
@@ -737,7 +750,7 @@ func cmdChecklist() error {
 	fmt.Println("Some checks failed. See hints below:")
 	fmt.Println("")
 	fmt.Println("• Docker: Install from https://docker.com/products/docker-desktop")
-	fmt.Println("• Launchd: Run 'tinyserve launchd install' to install and start the daemon (recommended)")
+	fmt.Println("• Launchd: Run 'brew services start tinyserve' or 'tinyserve launchd install'")
 	return nil
 }
 

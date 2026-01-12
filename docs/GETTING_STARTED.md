@@ -41,9 +41,10 @@ If you don't want Cloudflare Tunnel, you can expose tinyserve directly:
   tinyserve service add \
     --name whoami \
     --image traefik/whoami:v1.10 \
-    --hostname whoami.example.com \
     --port 80
   ```
+- Since `--hostname` is omitted, tinyserve uses the default domain: `whoami.example.com`
+- You can override with `--hostname custom.otherdomain.com` if needed
 
 ## 4) Deploy
 - Pull images and apply the stack:
