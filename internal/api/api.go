@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"os/exec"
@@ -344,8 +345,9 @@ func (h *Handler) handleDeleteService(w http.ResponseWriter, r *http.Request, na
 }
 
 type deployRequest struct {
-	Service   string `json:"service,omitempty"`
-	TimeoutMs int    `json:"timeout_ms,omitempty"` // health check timeout in milliseconds, default 60000
+	Service   string   `json:"service,omitempty"`
+	Services  []string `json:"services,omitempty"`
+	TimeoutMs int      `json:"timeout_ms,omitempty"` // health check timeout in milliseconds, default 60000
 }
 
 func (h *Handler) handleDeploy(w http.ResponseWriter, r *http.Request) {
@@ -381,7 +383,14 @@ func (h *Handler) handleDeploy(w http.ResponseWriter, r *http.Request) {
 
 	runner := docker.NewRunner(out.StagingDir)
 	targets := []string{}
-	if req.Service != "" {
+	if len(req.Services) > 0 {
+		for _, svc := range req.Services {
+			if svc == "" {
+				continue
+			}
+			targets = append(targets, sanitizeName(svc))
+		}
+	} else if req.Service != "" {
 		targets = append(targets, sanitizeName(req.Service))
 	}
 
@@ -1211,11 +1220,13 @@ func (h *Handler) handleRemoteEnable(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	start := time.Now()
 	var req remoteEnableRequest
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<16)).Decode(&req); err != nil {
 		http.Error(w, "invalid JSON", http.StatusBadRequest)
 		return
 	}
+	log.Printf("remote enable: request received (hostname=%q cloudflare=%t)", req.Hostname, req.Cloudflare)
 
 	if req.Hostname == "" {
 		http.Error(w, "hostname is required", http.StatusBadRequest)
@@ -1241,6 +1252,7 @@ func (h *Handler) handleRemoteEnable(w http.ResponseWriter, r *http.Request) {
 
 	// If --cloudflare flag is set, setup DNS and tunnel
 	if req.Cloudflare {
+		log.Printf("remote enable: starting Cloudflare setup (hostname=%q)", req.Hostname)
 		// Ensure tunnel is configured (via /init)
 		if st.Settings.CloudflareAPIToken == "" ||
 			st.Settings.Tunnel.TunnelID == "" {
@@ -1251,22 +1263,37 @@ func (h *Handler) handleRemoteEnable(w http.ResponseWriter, r *http.Request) {
 		// Create DNS CNAME record pointing to tunnel
 		cfClient := cloudflare.NewClient(st.Settings.CloudflareAPIToken)
 
+		log.Printf("remote enable: looking up Cloudflare zone for %q", req.Hostname)
 		zoneID, err := cfClient.GetZoneID(ctx, req.Hostname)
 		if err != nil {
 			http.Error(w, fmt.Sprintf("get zone ID: %v", err), http.StatusBadRequest)
 			return
 		}
+		log.Printf("remote enable: Cloudflare zone resolved (zone_id=%s)", zoneID)
 
 		target := fmt.Sprintf("%s.cfargotunnel.com", st.Settings.Tunnel.TunnelID)
+		log.Printf("remote enable: ensuring CNAME %q -> %q", req.Hostname, target)
 		if err := cfClient.EnsureCNAME(ctx, zoneID, req.Hostname, target, true); err != nil {
 			http.Error(w, fmt.Sprintf("configure DNS: %v", err), http.StatusInternalServerError)
 			return
 		}
+		log.Printf("remote enable: Cloudflare DNS configured (hostname=%q)", req.Hostname)
 
-		// Regenerate config and restart cloudflared
-		if err := h.applyConfig(ctx, st, []string{"cloudflared"}, 60*time.Second); err != nil {
-			http.Error(w, fmt.Sprintf("apply config: %v", err), http.StatusInternalServerError)
-			return
+		// Generate config but don't wait for docker (it can take too long on first pull)
+		// User can run `tinyserve deploy` to start containers
+		if err := h.checkDocker(ctx); err == nil {
+			log.Printf("remote enable: generating config for cloudflared")
+			out, err := generate.GenerateBaseFiles(ctx, st, h.GeneratedRoot)
+			if err != nil {
+				http.Error(w, fmt.Sprintf("generate config: %v", err), http.StatusInternalServerError)
+				return
+			}
+			// Promote the config immediately
+			ts := time.Now().UTC().Format("20060102-150405")
+			_ = h.backupCurrentConfig(ts)
+			_ = h.promote(out.StagingDir, ts)
+		} else {
+			log.Printf("remote enable: skipping config generation (docker unavailable: %v)", err)
 		}
 	}
 
@@ -1283,6 +1310,7 @@ func (h *Handler) handleRemoteEnable(w http.ResponseWriter, r *http.Request) {
 		resp["cloudflare"] = "configured"
 	}
 	writeJSON(w, resp)
+	log.Printf("remote enable: complete (hostname=%q cloudflare=%t duration=%s)", req.Hostname, req.Cloudflare, time.Since(start))
 }
 
 func (h *Handler) handleRemoteDisable(w http.ResponseWriter, r *http.Request) {

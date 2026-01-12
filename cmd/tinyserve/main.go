@@ -101,7 +101,7 @@ commands:
                [--mem MB] [--volume host:container] [--healthcheck "CMD ..."]
   service list                 list all services
   service remove --name NAME   remove a service
-  deploy [--service NAME] [--timeout SEC]  pull, restart, and wait for health
+  deploy [--service NAME]... [--timeout SEC]  pull, restart, and wait for health
   logs --service NAME [--tail N] [--follow]
   rollback                     restore last backup
   launchd install              install and load launchd agent
@@ -109,7 +109,8 @@ commands:
   launchd status               show launchd agent status
 
 remote:
-  remote enable --hostname H [--cloudflare]   enable remote access (--cloudflare to setup DNS/tunnel)
+  remote enable --hostname H [--cloudflare] [--deploy] [--timeout SEC]
+                               enable remote access (--cloudflare to setup DNS/tunnel)
   remote disable               disable remote access
   remote token create [--name] create a deploy token
   remote token list            list all tokens
@@ -554,7 +555,7 @@ func parseEnvFile(path string) (map[string]string, error) {
 }
 
 func cmdDeploy(args []string) error {
-	var service string
+	var services []string
 	timeoutSec := 60 // default 60 seconds
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
@@ -563,7 +564,7 @@ func cmdDeploy(args []string) error {
 			if i >= len(args) {
 				return fmt.Errorf("--service requires a value")
 			}
-			service = args[i]
+			services = append(services, args[i])
 		case "--timeout":
 			i++
 			if i >= len(args) {
@@ -578,34 +579,45 @@ func cmdDeploy(args []string) error {
 			return fmt.Errorf("unknown flag: %s", args[i])
 		}
 	}
-	payload := map[string]any{
-		"timeout_ms": timeoutSec * 1000,
-	}
-	if service != "" {
-		payload["service"] = service
-	}
-	body, _ := json.Marshal(payload)
-	req, err := http.NewRequest(http.MethodPost, apiBase()+"/deploy", bytes.NewReader(body))
+	out, err := doDeploy(services, timeoutSec)
 	if err != nil {
-		return err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return wrapConnError(err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode >= 300 {
-		data, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("deploy failed: %s (%s)", resp.Status, strings.TrimSpace(string(data)))
-	}
-	var out map[string]any
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
 		return err
 	}
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", "  ")
 	return enc.Encode(out)
+}
+
+func doDeploy(services []string, timeoutSec int) (map[string]any, error) {
+	payload := map[string]any{
+		"timeout_ms": timeoutSec * 1000,
+	}
+	if len(services) > 0 {
+		payload["services"] = services
+		if len(services) == 1 {
+			payload["service"] = services[0]
+		}
+	}
+	body, _ := json.Marshal(payload)
+	req, err := http.NewRequest(http.MethodPost, apiBase()+"/deploy", bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, wrapConnError(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		data, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("deploy failed: %s (%s)", resp.Status, strings.TrimSpace(string(data)))
+	}
+	var out map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func cmdLogs(args []string) error {
@@ -1093,6 +1105,9 @@ func cmdRemote(args []string) error {
 func cmdRemoteEnable(args []string) error {
 	var hostname string
 	var cloudflare bool
+	var deploy bool
+	var timeoutSet bool
+	timeoutSec := 60
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
 		case "--hostname":
@@ -1103,12 +1118,31 @@ func cmdRemoteEnable(args []string) error {
 			hostname = args[i]
 		case "--cloudflare":
 			cloudflare = true
+		case "--deploy":
+			deploy = true
+		case "--timeout":
+			i++
+			if i >= len(args) {
+				return fmt.Errorf("--timeout requires a value in seconds")
+			}
+			t, err := strconv.Atoi(args[i])
+			if err != nil {
+				return fmt.Errorf("invalid timeout: %w", err)
+			}
+			timeoutSec = t
+			timeoutSet = true
 		default:
 			return fmt.Errorf("unknown flag: %s", args[i])
 		}
 	}
 	if hostname == "" {
 		return fmt.Errorf("--hostname is required")
+	}
+	if deploy && !cloudflare {
+		return fmt.Errorf("--deploy requires --cloudflare")
+	}
+	if timeoutSet && !deploy {
+		return fmt.Errorf("--timeout requires --deploy")
 	}
 
 	payload := map[string]any{
@@ -1133,7 +1167,16 @@ func cmdRemoteEnable(args []string) error {
 	}
 	fmt.Printf("✓ Remote access enabled at %s\n", hostname)
 	if cloudflare {
-		fmt.Println("  Cloudflare DNS and tunnel configured")
+		fmt.Println("  Cloudflare DNS configured")
+		if deploy {
+			fmt.Println("  Starting tunnel (traefik + cloudflared)...")
+			if _, err := doDeploy([]string{"traefik", "cloudflared"}, timeoutSec); err != nil {
+				return fmt.Errorf("remote enabled but deploy failed: %w", err)
+			}
+			fmt.Println("  Tunnel started")
+		} else {
+			fmt.Println("  Run 'tinyserve deploy' to start the tunnel")
+		}
 	}
 	return nil
 }

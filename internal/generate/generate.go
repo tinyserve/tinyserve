@@ -82,6 +82,8 @@ func writeCompose(path string, s state.State) error {
       - --providers.docker.exposedbydefault=false
       - --entrypoints.web.address=:80
     networks: [edge]
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
     labels:
       - "traefik.enable=true"
     # No host ports published; access via cloudflared -> traefik
