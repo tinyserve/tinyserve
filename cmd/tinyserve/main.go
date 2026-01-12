@@ -185,11 +185,29 @@ func cmdInit(args []string) error {
 
 	// Get API token interactively if not provided
 	if apiToken == "" {
+		// Check if there's an existing token from a previous init attempt
+		existingToken := getExistingCloudflareToken()
+		if existingToken != "" {
+			fmt.Println()
+			fmt.Println("Found an existing Cloudflare API token from a previous init attempt.")
+			fmt.Print("Use the existing token? [Y/n]: ")
+
+			answer, _ := reader.ReadString('\n')
+			answer = strings.TrimSpace(strings.ToLower(answer))
+
+			if answer != "n" && answer != "no" {
+				apiToken = existingToken
+			}
+		}
+	}
+
+	if apiToken == "" {
 		fmt.Println()
 		fmt.Println("To create a Cloudflare API token:")
 		fmt.Println("  1. Go to: https://dash.cloudflare.com/profile/api-tokens")
 		fmt.Println("  2. Click 'Create Token'")
 		fmt.Println("  3. Use 'Edit zone DNS' template or create custom with:")
+		fmt.Println("     - Account > Account Settings > Read")
 		fmt.Println("     - Account > Cloudflare Tunnel > Edit")
 		fmt.Println("     - Zone > DNS > Edit")
 		fmt.Println()
@@ -1226,6 +1244,24 @@ func formatTime(ts string) string {
 		return ts
 	}
 	return t.Local().Format("2006-01-02 15:04:05")
+}
+
+func getExistingCloudflareToken() string {
+	resp, err := http.Get(apiBase() + "/init/token")
+	if err != nil {
+		return ""
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return ""
+	}
+	var result struct {
+		CloudflareAPIToken string `json:"cloudflare_api_token"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return ""
+	}
+	return result.CloudflareAPIToken
 }
 
 func cmdRemoteTokenRevoke(args []string) error {

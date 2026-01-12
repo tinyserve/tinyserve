@@ -36,12 +36,13 @@ type RemoteSettings struct {
 }
 
 type GlobalSettings struct {
-	ComposeProjectName string         `json:"compose_project_name"`
-	DefaultDomain      string         `json:"default_domain,omitempty"`
-	Tunnel             TunnelSettings `json:"tunnel"`
-	UILocalPort        int            `json:"ui_local_port"`
-	MaxBackups         int            `json:"max_backups,omitempty"` // default 10
-	Remote             RemoteSettings `json:"remote,omitempty"`
+	ComposeProjectName  string         `json:"compose_project_name"`
+	DefaultDomain       string         `json:"default_domain,omitempty"`
+	Tunnel              TunnelSettings `json:"tunnel"`
+	UILocalPort         int            `json:"ui_local_port"`
+	MaxBackups          int            `json:"max_backups,omitempty"` // default 10
+	Remote              RemoteSettings `json:"remote,omitempty"`
+	CloudflareAPIToken  string         `json:"cloudflare_api_token,omitempty"`
 }
 
 type ServiceResources struct {

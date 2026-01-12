@@ -52,6 +52,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, browserAuth *BrowserAuthMid
 	mux.HandleFunc("/rollback", authMw.RequireToken(h.handleRollback))
 	mux.HandleFunc("/logs", h.handleLogs)
 	mux.HandleFunc("/init", authMw.RequireToken(h.handleInit))
+	mux.HandleFunc("/init/token", h.handleInitToken)
 	mux.HandleFunc("/health", h.handleHealth)
 
 	mux.HandleFunc("/tokens", authMw.RequireToken(h.handleTokens))
@@ -106,11 +107,12 @@ func (h *Handler) handleStatus(w http.ResponseWriter, r *http.Request) {
 	tunnel := summarizeContainer(statusMap["cloudflared"])
 
 	resp := map[string]any{
-		"status":        "ok",
-		"service_count": len(st.Services),
-		"updated_at":    st.UpdatedAt.Format(time.RFC3339),
-		"proxy":         proxy,
-		"tunnel":        tunnel,
+		"status":               "ok",
+		"service_count":        len(st.Services),
+		"updated_at":           st.UpdatedAt.Format(time.RFC3339),
+		"proxy":                proxy,
+		"tunnel":               tunnel,
+		"has_cloudflare_token": st.Settings.CloudflareAPIToken != "",
 	}
 	writeJSON(w, resp)
 }
@@ -646,6 +648,7 @@ func (h *Handler) handleInit(w http.ResponseWriter, r *http.Request) {
 	st.Settings.Tunnel.TunnelID = tunnelID
 	st.Settings.Tunnel.TunnelName = req.TunnelName
 	st.Settings.Tunnel.AccountID = accountID
+	st.Settings.CloudflareAPIToken = req.APIToken
 	if credsPath != "" {
 		st.Settings.Tunnel.CredentialsFile = credsPath
 	}
@@ -664,6 +667,23 @@ func (h *Handler) handleInit(w http.ResponseWriter, r *http.Request) {
 		"created":     existing == nil,
 	}
 	writeJSON(w, resp)
+}
+
+func (h *Handler) handleInitToken(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	st, err := h.Store.Load(r.Context())
+	if err != nil {
+		http.Error(w, fmt.Sprintf("load state: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	writeJSON(w, map[string]any{
+		"cloudflare_api_token": st.Settings.CloudflareAPIToken,
+	})
 }
 
 func (h *Handler) checkDocker(ctx context.Context) error {
