@@ -35,7 +35,7 @@ func GenerateBaseFiles(ctx context.Context, s state.State, root string) (Output,
 		filepath.Join(staging, "services"),
 	}
 	for _, p := range paths {
-		if err := os.MkdirAll(p, 0o755); err != nil {
+		if err := os.MkdirAll(p, 0o700); err != nil {
 			return Output{}, fmt.Errorf("create staging dir %s: %w", p, err)
 		}
 	}
@@ -113,7 +113,7 @@ func writeCompose(path string, s state.State) error {
 
 	sb.WriteString("networks:\n  edge: {}\n")
 
-	return os.WriteFile(path, []byte(strings.TrimSpace(sb.String())+"\n"), 0o644)
+	return os.WriteFile(path, []byte(strings.TrimSpace(sb.String())+"\n"), 0o600)
 }
 
 func writeCloudflared(path string, s state.State, hostnames []string) error {
@@ -137,7 +137,7 @@ func writeCloudflared(path string, s state.State, hostnames []string) error {
 		sb.WriteString(fmt.Sprintf("  - hostname: %s\n    service: http://traefik:80\n", h))
 	}
 	sb.WriteString("  - service: http_status:404\n")
-	return os.WriteFile(path, []byte(sb.String()), 0o644)
+	return os.WriteFile(path, []byte(sb.String()), 0o600)
 }
 
 func writeTraefikDynamic(path string) error {
@@ -147,7 +147,7 @@ http:
   routers: {}
   services: {}
 `)
-	return os.WriteFile(path, []byte(content+"\n"), 0o644)
+	return os.WriteFile(path, []byte(content+"\n"), 0o600)
 }
 
 func appendService(sb *strings.Builder, svc state.Service, defaultDomain string) {

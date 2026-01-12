@@ -64,7 +64,7 @@ type SQLiteStore struct {
 }
 
 func NewSQLiteStore(path string) (*SQLiteStore, error) {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, fmt.Errorf("create state dir: %w", err)
 	}
 

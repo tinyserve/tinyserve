@@ -61,6 +61,38 @@ Notes:
 - macOS cannot run the upstream Docker Engine natively; you need a VM-backed runtime like Colima/Rancher.
 - Keep `docker` CLI installed (`brew install docker`) even when using Colima/Rancher; it talks to the socket they expose.
 
+### Ensuring Docker daemon is running
+
+Before using tinyserve, verify the Docker daemon is accessible:
+
+```bash
+# Check if Docker daemon is running
+docker info
+
+# If using Colima and it's not running:
+colima status          # Check Colima VM status
+colima start           # Start Colima (use same flags as initial setup)
+
+# If using Rancher Desktop:
+# Open Rancher Desktop app or check its menu bar icon
+
+# Quick health check
+docker ps              # Should list containers (empty list is OK)
+```
+
+**Troubleshooting**:
+- `Cannot connect to the Docker daemon`: The VM isn't running. Start Colima/Rancher.
+- `docker: command not found`: Install Docker CLI with `brew install docker`.
+- `permission denied`: Check that your user can access the Docker socket.
+
+**Auto-start Colima on login** (optional):
+```bash
+# Create a launchd agent for Colima
+brew services start colima
+```
+
+**tinyserve checklist**: Run `tinyserve checklist` to verify Docker and all other prerequisites are properly configured.
+
 ## 4) Install tinyserve (brew)
 - If tinyserve is in Homebrew core: `brew install tinyserve`
 - If using a tap: `brew tap tinyserve/tinyserve` then `brew install tinyserve`

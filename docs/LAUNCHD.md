@@ -7,9 +7,37 @@ This guide covers installing tinyserved as a macOS LaunchAgent so it starts auto
 - tinyserve installed (via Homebrew or manual build)
 - Docker runtime running (Colima, Rancher Desktop, or Lima)
 
-## Quick Install (Recommended)
+## Option A: Homebrew Services (Recommended for Homebrew users)
 
-Use the CLI to automatically install and configure the launchd agent:
+If you installed tinyserve via Homebrew, use `brew services` for the simplest setup:
+
+```bash
+brew services start tinyserve
+```
+
+This automatically:
+- Creates and installs the launchd plist
+- Starts the daemon immediately
+- Configures it to start at login
+
+Management commands:
+
+```bash
+# Check status
+brew services info tinyserve
+
+# Stop the service
+brew services stop tinyserve
+
+# Restart after upgrade
+brew services restart tinyserve
+```
+
+Logs are written to `~/Library/Logs/Homebrew/tinyserved.log`.
+
+## Option B: CLI Install
+
+Use the CLI to install and configure the launchd agent with more control:
 
 ```bash
 tinyserve launchd install
@@ -28,7 +56,7 @@ tinyserve launchd status
 tinyserve status
 ```
 
-## Management Commands
+### Management Commands
 
 ```bash
 # Check launchd agent status
@@ -42,7 +70,7 @@ tinyserve launchd uninstall
 tinyserve launchd install
 ```
 
-## Manual Installation
+## Option C: Manual Installation
 
 If you prefer manual setup or need customization:
 

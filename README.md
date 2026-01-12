@@ -6,6 +6,7 @@ TinyServe is a local host manager targeted for a single Mac mini running small D
 
 ```
 brew install tinyserve/tap/tinyserve
+brew services start tinyserve
 tinyserve checklist
 ```
 

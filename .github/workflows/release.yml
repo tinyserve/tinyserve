@@ -105,6 +105,15 @@ jobs:
               bin.install "tinyserve"
               bin.install "tinyserved"
             end
+
+            service do
+              run [opt_bin/"tinyserved"]
+              keep_alive crashed: true
+              environment_variables TINYSERVE_API: "http://127.0.0.1:7070", PATH: std_service_path_env
+              log_path var/"log/tinyserved.log"
+              error_log_path var/"log/tinyserved.log"
+              process_type :background
+            end
           end
           EOF
 

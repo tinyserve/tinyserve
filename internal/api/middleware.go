@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"log"
 	"net/http"
 	"strings"
 	"sync"
@@ -54,6 +55,9 @@ func (m *BrowserAuthMiddleware) getAuthenticator(cfg state.BrowserAuthSettings) 
 			PolicyAUD:  cfg.PolicyAUD,
 		})
 	default:
+		if cfg.Type != "" && cfg.Type != string(auth.BrowserAuthNone) {
+			log.Printf("WARNING: unknown browser auth type %q, falling back to no authentication", cfg.Type)
+		}
 		m.authenticator = &auth.NoopAuthenticator{}
 	}
 	m.lastConfig = cfg

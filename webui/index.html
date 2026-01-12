@@ -256,6 +256,14 @@
       tunnelHealth.textContent = tunnel.health || "";
     }
 
+    // Safely escape HTML to prevent XSS
+    function escapeHtml(str) {
+      if (str == null) return "";
+      const div = document.createElement("div");
+      div.textContent = str;
+      return div.innerHTML;
+    }
+
     function renderServices(list) {
       servicesContainer.innerHTML = "";
       if (!list || list.length === 0) {
@@ -264,21 +272,66 @@
       }
 
       for (const svc of list) {
-        const hosts = (svc.hostnames || []).map(h => `<span class="badge">${h}</span>`).join(" ");
-        const statusClass = svc.status === "healthy" ? "badge ok" : "badge warn";
         const serviceEl = document.createElement("div");
         serviceEl.className = "service";
-        serviceEl.innerHTML = `
-          <h3>${svc.name || "unnamed"}</h3>
-          <div class="pill-row" style="margin-bottom:6px;">
-            <span class="${statusClass}">${svc.status || "pending"}</span>
-            <span class="badge">${svc.type || "registry-image"}</span>
-            ${svc.enabled ? '<span class="badge">enabled</span>' : '<span class="badge warn">disabled</span>'}
-          </div>
-          <div class="inline-muted">Image: ${svc.image || "—"}</div>
-          <div class="inline-muted">Port: ${svc.internal_port || "—"}</div>
-          <div class="inline-muted">Hosts: ${hosts || "—"}</div>
-        `;
+
+        // Create elements safely using textContent
+        const h3 = document.createElement("h3");
+        h3.textContent = svc.name || "unnamed";
+
+        const pillRow = document.createElement("div");
+        pillRow.className = "pill-row";
+        pillRow.style.marginBottom = "6px";
+
+        const statusBadge = document.createElement("span");
+        statusBadge.className = svc.status === "healthy" ? "badge ok" : "badge warn";
+        statusBadge.textContent = svc.status || "pending";
+
+        const typeBadge = document.createElement("span");
+        typeBadge.className = "badge";
+        typeBadge.textContent = svc.type || "registry-image";
+
+        const enabledBadge = document.createElement("span");
+        enabledBadge.className = svc.enabled ? "badge" : "badge warn";
+        enabledBadge.textContent = svc.enabled ? "enabled" : "disabled";
+
+        pillRow.appendChild(statusBadge);
+        pillRow.appendChild(typeBadge);
+        pillRow.appendChild(enabledBadge);
+
+        const imageDiv = document.createElement("div");
+        imageDiv.className = "inline-muted";
+        imageDiv.textContent = "Image: " + (svc.image || "—");
+
+        const portDiv = document.createElement("div");
+        portDiv.className = "inline-muted";
+        portDiv.textContent = "Port: " + (svc.internal_port || "—");
+
+        const hostsDiv = document.createElement("div");
+        hostsDiv.className = "inline-muted";
+        hostsDiv.appendChild(document.createTextNode("Hosts: "));
+
+        const hostnames = svc.hostnames || [];
+        if (hostnames.length === 0) {
+          hostsDiv.appendChild(document.createTextNode("—"));
+        } else {
+          hostnames.forEach((h, i) => {
+            const badge = document.createElement("span");
+            badge.className = "badge";
+            badge.textContent = h;
+            hostsDiv.appendChild(badge);
+            if (i < hostnames.length - 1) {
+              hostsDiv.appendChild(document.createTextNode(" "));
+            }
+          });
+        }
+
+        serviceEl.appendChild(h3);
+        serviceEl.appendChild(pillRow);
+        serviceEl.appendChild(imageDiv);
+        serviceEl.appendChild(portDiv);
+        serviceEl.appendChild(hostsDiv);
+
         servicesContainer.appendChild(serviceEl);
       }
     }
@@ -318,7 +371,12 @@
       try {
         const me = await fetchJSON("/me");
         if (me.authenticated && me.email) {
-          userInfoEl.innerHTML = `<span class="email">${me.email}</span>`;
+          // Use textContent to prevent XSS
+          userInfoEl.textContent = "";
+          const emailSpan = document.createElement("span");
+          emailSpan.className = "email";
+          emailSpan.textContent = me.email;
+          userInfoEl.appendChild(emailSpan);
           userInfoEl.style.display = "flex";
         }
       } catch (err) {

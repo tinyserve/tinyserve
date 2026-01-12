@@ -114,7 +114,7 @@ func ensureDataDir() (string, error) {
 	}
 
 	for _, dir := range subdirs {
-		if err := os.MkdirAll(filepath.Join(dataDir, dir), 0o755); err != nil {
+		if err := os.MkdirAll(filepath.Join(dataDir, dir), 0o700); err != nil {
 			return "", err
 		}
 	}

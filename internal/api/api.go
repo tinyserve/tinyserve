@@ -19,6 +19,7 @@ import (
 	"tinyserve/internal/docker"
 	"tinyserve/internal/generate"
 	"tinyserve/internal/state"
+	"tinyserve/internal/validate"
 	"tinyserve/internal/version"
 )
 
@@ -53,11 +54,11 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, browserAuth *BrowserAuthMid
 	mux.HandleFunc("/init", authMw.RequireToken(h.handleInit))
 	mux.HandleFunc("/health", h.handleHealth)
 
-	mux.HandleFunc("/tokens", h.handleTokens)
-	mux.HandleFunc("/tokens/", h.handleTokenByID)
+	mux.HandleFunc("/tokens", authMw.RequireToken(h.handleTokens))
+	mux.HandleFunc("/tokens/", authMw.RequireToken(h.handleTokenByID))
 
-	mux.HandleFunc("/remote/enable", h.handleRemoteEnable)
-	mux.HandleFunc("/remote/disable", h.handleRemoteDisable)
+	mux.HandleFunc("/remote/enable", authMw.RequireToken(h.handleRemoteEnable))
+	mux.HandleFunc("/remote/disable", authMw.RequireToken(h.handleRemoteDisable))
 
 	mux.Handle("/me", browserAuth.Wrap(http.HandlerFunc(h.handleMe)))
 }
@@ -157,7 +158,7 @@ type addServiceRequest struct {
 
 func (h *Handler) handleAddService(w http.ResponseWriter, r *http.Request) {
 	var payload addServiceRequest
-	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&payload); err != nil {
 		http.Error(w, "invalid JSON", http.StatusBadRequest)
 		return
 	}
@@ -166,7 +167,7 @@ func (h *Handler) handleAddService(w http.ResponseWriter, r *http.Request) {
 		ID:           payload.ID,
 		Name:         strings.TrimSpace(payload.Name),
 		Type:         payload.Type,
-		Image:        payload.Image,
+		Image:        strings.TrimSpace(payload.Image),
 		InternalPort: payload.InternalPort,
 		Hostnames:    payload.Hostnames,
 		Env:          payload.Env,
@@ -183,6 +184,60 @@ func (h *Handler) handleAddService(w http.ResponseWriter, r *http.Request) {
 	if svc.Name == "" || svc.Image == "" || svc.InternalPort == 0 {
 		http.Error(w, "name, image, and internal_port are required", http.StatusBadRequest)
 		return
+	}
+
+	// Validate service name
+	if err := validate.ServiceName(svc.Name); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	// Validate image name
+	if err := validate.ImageName(svc.Image); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	// Validate port
+	if err := validate.Port(svc.InternalPort); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	// Validate hostnames
+	for _, hostname := range svc.Hostnames {
+		if err := validate.Hostname(hostname); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+	}
+
+	// Validate environment variables
+	for key, value := range svc.Env {
+		if err := validate.EnvKey(key); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if err := validate.EnvValue(value); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+	}
+
+	// Validate volumes
+	for _, volume := range svc.Volumes {
+		if err := validate.VolumePath(volume); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+	}
+
+	// Validate healthcheck
+	if svc.Healthcheck != nil {
+		if err := validate.HealthcheckCommand(svc.Healthcheck.Command); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
 	}
 	if svc.Type == "" {
 		svc.Type = state.ServiceTypeRegistryImage
@@ -289,7 +344,7 @@ func (h *Handler) handleDeploy(w http.ResponseWriter, r *http.Request) {
 
 	var req deployRequest
 	if r.Body != nil {
-		_ = json.NewDecoder(r.Body).Decode(&req)
+		_ = json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<16)).Decode(&req)
 	}
 
 	// Default timeout: 60 seconds
@@ -495,7 +550,7 @@ func (h *Handler) handleInit(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req initRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<16)).Decode(&req); err != nil {
 		http.Error(w, "invalid JSON", http.StatusBadRequest)
 		return
 	}
@@ -623,7 +678,7 @@ func (h *Handler) promote(stagingDir, timestamp string) error {
 	current := h.currentDir()
 	backup := filepath.Join(h.BackupsDir, "backup-"+timestamp)
 
-	if err := os.MkdirAll(h.BackupsDir, 0o755); err != nil {
+	if err := os.MkdirAll(h.BackupsDir, 0o700); err != nil {
 		return fmt.Errorf("ensure backups dir: %w", err)
 	}
 	if _, err := os.Stat(current); err == nil {
@@ -642,7 +697,7 @@ func (h *Handler) backupState(timestamp string) error {
 	if h.StatePath == "" {
 		return nil
 	}
-	if err := os.MkdirAll(h.BackupsDir, 0o755); err != nil {
+	if err := os.MkdirAll(h.BackupsDir, 0o700); err != nil {
 		return err
 	}
 	dst := filepath.Join(h.BackupsDir, "state-"+timestamp+".json")
@@ -657,7 +712,7 @@ func (h *Handler) backupCurrentConfig(timestamp string) error {
 		return nil
 	}
 	backup := filepath.Join(h.BackupsDir, "backup-"+timestamp)
-	if err := os.MkdirAll(h.BackupsDir, 0o755); err != nil {
+	if err := os.MkdirAll(h.BackupsDir, 0o700); err != nil {
 		return err
 	}
 	return copyDir(current, backup)
@@ -842,10 +897,10 @@ func copyFile(src, dst string) error {
 	}
 	defer in.Close()
 
-	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
 		return err
 	}
-	out, err := os.Create(dst)
+	out, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
 	if err != nil {
 		return err
 	}
@@ -971,7 +1026,7 @@ func (h *Handler) handleListTokens(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) handleCreateToken(w http.ResponseWriter, r *http.Request) {
 	var req createTokenRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<16)).Decode(&req); err != nil {
 		http.Error(w, "invalid JSON", http.StatusBadRequest)
 		return
 	}
@@ -1080,13 +1135,19 @@ func (h *Handler) handleRemoteEnable(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req remoteEnableRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<16)).Decode(&req); err != nil {
 		http.Error(w, "invalid JSON", http.StatusBadRequest)
 		return
 	}
 
 	if req.Hostname == "" {
 		http.Error(w, "hostname is required", http.StatusBadRequest)
+		return
+	}
+
+	// Validate hostname format
+	if err := validate.Hostname(req.Hostname); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
