@@ -429,3 +429,182 @@ func TestSQLiteStoreValidation(t *testing.T) {
 		t.Error("Save() should reject invalid state")
 	}
 }
+
+func TestSQLiteStoreCloudflareAndRemote(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "tinyserve-sqlite-test-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	dbPath := filepath.Join(tmpDir, "state.db")
+	store, err := NewSQLiteStore(dbPath)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore() error = %v", err)
+	}
+	defer store.Close()
+
+	ctx := context.Background()
+
+	// Load initial state
+	s, err := store.Load(ctx)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if s.Settings.CloudflareAPIToken != "" {
+		t.Error("expected empty CloudflareAPIToken initially")
+	}
+	if s.Settings.Remote.Enabled {
+		t.Error("expected Remote.Enabled to be false initially")
+	}
+
+	// Set Cloudflare API token and remote settings
+	s.Settings.CloudflareAPIToken = "test-cf-token-123"
+	s.Settings.Remote.Enabled = true
+	s.Settings.Remote.Hostname = "admin.example.com"
+	s.Settings.Remote.BrowserAuth = BrowserAuthSettings{
+		Type:       "cloudflare_access",
+		TeamDomain: "example.cloudflareaccess.com",
+		PolicyAUD:  "aud123",
+	}
+
+	if err := store.Save(ctx, s); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+
+	// Reload and verify
+	reloaded, err := store.Load(ctx)
+	if err != nil {
+		t.Fatalf("Load() after Save() error = %v", err)
+	}
+
+	if reloaded.Settings.CloudflareAPIToken != "test-cf-token-123" {
+		t.Errorf("CloudflareAPIToken = %q, want %q", reloaded.Settings.CloudflareAPIToken, "test-cf-token-123")
+	}
+	if !reloaded.Settings.Remote.Enabled {
+		t.Error("Remote.Enabled = false, want true")
+	}
+	if reloaded.Settings.Remote.Hostname != "admin.example.com" {
+		t.Errorf("Remote.Hostname = %q, want %q", reloaded.Settings.Remote.Hostname, "admin.example.com")
+	}
+	if reloaded.Settings.Remote.BrowserAuth.Type != "cloudflare_access" {
+		t.Errorf("Remote.BrowserAuth.Type = %q, want %q", reloaded.Settings.Remote.BrowserAuth.Type, "cloudflare_access")
+	}
+	if reloaded.Settings.Remote.BrowserAuth.TeamDomain != "example.cloudflareaccess.com" {
+		t.Errorf("Remote.BrowserAuth.TeamDomain = %q, want %q", reloaded.Settings.Remote.BrowserAuth.TeamDomain, "example.cloudflareaccess.com")
+	}
+}
+
+func TestSQLiteStoreTokens(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "tinyserve-sqlite-test-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	dbPath := filepath.Join(tmpDir, "state.db")
+	store, err := NewSQLiteStore(dbPath)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore() error = %v", err)
+	}
+	defer store.Close()
+
+	ctx := context.Background()
+
+	// Load initial state
+	s, err := store.Load(ctx)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if len(s.Tokens) != 0 {
+		t.Errorf("expected 0 tokens, got %d", len(s.Tokens))
+	}
+
+	// Add a token
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	s.Tokens = append(s.Tokens, APIToken{
+		ID:        "tok-123",
+		Name:      "test-token",
+		Hash:      "hash123",
+		CreatedAt: now,
+	})
+
+	if err := store.Save(ctx, s); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+
+	// Reload and verify
+	reloaded, err := store.Load(ctx)
+	if err != nil {
+		t.Fatalf("Load() after Save() error = %v", err)
+	}
+	if len(reloaded.Tokens) != 1 {
+		t.Fatalf("expected 1 token, got %d", len(reloaded.Tokens))
+	}
+
+	tok := reloaded.Tokens[0]
+	if tok.ID != "tok-123" {
+		t.Errorf("token ID = %q, want %q", tok.ID, "tok-123")
+	}
+	if tok.Name != "test-token" {
+		t.Errorf("token Name = %q, want %q", tok.Name, "test-token")
+	}
+	if tok.Hash != "hash123" {
+		t.Errorf("token Hash = %q, want %q", tok.Hash, "hash123")
+	}
+
+	// Add second token, update first with LastUsed
+	lastUsed := now.Add(time.Hour)
+	reloaded.Tokens[0].LastUsed = &lastUsed
+	reloaded.Tokens = append(reloaded.Tokens, APIToken{
+		ID:        "tok-456",
+		Name:      "second-token",
+		Hash:      "hash456",
+		CreatedAt: now,
+	})
+
+	if err := store.Save(ctx, reloaded); err != nil {
+		t.Fatalf("Save() with 2 tokens error = %v", err)
+	}
+
+	// Reload and verify both tokens
+	reloaded2, err := store.Load(ctx)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if len(reloaded2.Tokens) != 2 {
+		t.Fatalf("expected 2 tokens, got %d", len(reloaded2.Tokens))
+	}
+
+	// Find first token and check LastUsed was updated
+	var found bool
+	for _, tok := range reloaded2.Tokens {
+		if tok.ID == "tok-123" {
+			found = true
+			if tok.LastUsed == nil {
+				t.Error("expected LastUsed to be set")
+			}
+		}
+	}
+	if !found {
+		t.Error("first token not found after reload")
+	}
+
+	// Delete first token
+	reloaded2.Tokens = []APIToken{reloaded2.Tokens[1]}
+	if err := store.Save(ctx, reloaded2); err != nil {
+		t.Fatalf("Save() after deletion error = %v", err)
+	}
+
+	// Verify deletion
+	reloaded3, err := store.Load(ctx)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if len(reloaded3.Tokens) != 1 {
+		t.Fatalf("expected 1 token after deletion, got %d", len(reloaded3.Tokens))
+	}
+	if reloaded3.Tokens[0].ID != "tok-456" {
+		t.Errorf("wrong token remaining: %s", reloaded3.Tokens[0].ID)
+	}
+}

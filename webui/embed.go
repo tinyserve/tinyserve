@@ -19,10 +19,18 @@ func Handler() http.Handler {
 	}
 	fileServer := http.FileServer(http.FS(sub))
 
+	// Pre-read index.html to serve directly and avoid http.FileServer redirect loop.
+	indexHTML, err := fs.ReadFile(sub, "index.html")
+	if err != nil {
+		panic(err)
+	}
+
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/" || r.URL.Path == "" {
-			r = r.Clone(r.Context())
-			r.URL.Path = "/index.html"
+		// Serve index.html directly to avoid FileServer's redirect from /index.html to /
+		if r.URL.Path == "/" || r.URL.Path == "" || r.URL.Path == "/index.html" {
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			w.Write(indexHTML)
+			return
 		}
 		// Prevent directory traversal attempts.
 		if strings.Contains(r.URL.Path, "..") {

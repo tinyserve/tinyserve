@@ -55,6 +55,22 @@ type TunnelCredentials struct {
 	TunnelSecret string `json:"TunnelSecret"`
 }
 
+// Zone represents a Cloudflare DNS zone.
+type Zone struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
+// DNSRecord represents a DNS record in a zone.
+type DNSRecord struct {
+	ID      string `json:"id"`
+	Type    string `json:"type"`
+	Name    string `json:"name"`
+	Content string `json:"content"`
+	TTL     int    `json:"ttl"`
+	Proxied bool   `json:"proxied"`
+}
+
 type apiResponse[T any] struct {
 	Success  bool       `json:"success"`
 	Errors   []apiError `json:"errors"`
@@ -166,6 +182,117 @@ func (c *Client) GetTunnelToken(ctx context.Context, accountID, tunnelID string)
 		return "", fmt.Errorf("cloudflare: %v", resp.Errors)
 	}
 	return resp.Result, nil
+}
+
+// GetZoneID returns the zone ID for the given zone name.
+func (c *Client) GetZoneID(ctx context.Context, zoneName string) (string, error) {
+	return c.FindZoneForHostname(ctx, zoneName)
+}
+
+// FindZoneForHostname finds the zone that contains the given hostname.
+// It walks up the domain hierarchy to find a matching zone.
+// E.g., for "staging.tinyserve.org" it tries: staging.tinyserve.org, tinyserve.org, org
+func (c *Client) FindZoneForHostname(ctx context.Context, hostname string) (string, error) {
+	parts := splitDomain(hostname)
+	for i := 0; i < len(parts)-1; i++ {
+		candidate := joinDomain(parts[i:])
+		var resp apiResponse[[]Zone]
+		path := fmt.Sprintf("/zones?name=%s&status=active", candidate)
+		if err := c.doRequest(ctx, "GET", path, nil, &resp); err != nil {
+			return "", err
+		}
+		if resp.Success && len(resp.Result) > 0 {
+			return resp.Result[0].ID, nil
+		}
+	}
+	return "", fmt.Errorf("no zone found for hostname: %s", hostname)
+}
+
+func splitDomain(domain string) []string {
+	var parts []string
+	current := ""
+	for i := len(domain) - 1; i >= 0; i-- {
+		if domain[i] == '.' {
+			if current != "" {
+				parts = append([]string{current}, parts...)
+			}
+			current = ""
+		} else {
+			current = string(domain[i]) + current
+		}
+	}
+	if current != "" {
+		parts = append([]string{current}, parts...)
+	}
+	return parts
+}
+
+func joinDomain(parts []string) string {
+	result := ""
+	for i, p := range parts {
+		if i > 0 {
+			result += "."
+		}
+		result += p
+	}
+	return result
+}
+
+// ListDNSRecords returns DNS records matching the given filters.
+func (c *Client) ListDNSRecords(ctx context.Context, zoneID, recordType, name string) ([]DNSRecord, error) {
+	var resp apiResponse[[]DNSRecord]
+	path := fmt.Sprintf("/zones/%s/dns_records?type=%s&name=%s", zoneID, recordType, name)
+	if err := c.doRequest(ctx, "GET", path, nil, &resp); err != nil {
+		return nil, err
+	}
+	if !resp.Success {
+		return nil, fmt.Errorf("cloudflare: %v", resp.Errors)
+	}
+	return resp.Result, nil
+}
+
+// EnsureCNAME ensures a CNAME record exists with the correct target.
+// Creates the record if it doesn't exist, updates it if the content differs.
+func (c *Client) EnsureCNAME(ctx context.Context, zoneID, name, target string, proxied bool) error {
+	records, err := c.ListDNSRecords(ctx, zoneID, "CNAME", name)
+	if err != nil {
+		return err
+	}
+
+	record := DNSRecord{
+		Type:    "CNAME",
+		Name:    name,
+		Content: target,
+		TTL:     1,
+		Proxied: proxied,
+	}
+
+	if len(records) == 0 {
+		var resp apiResponse[DNSRecord]
+		path := fmt.Sprintf("/zones/%s/dns_records", zoneID)
+		if err := c.doRequest(ctx, "POST", path, record, &resp); err != nil {
+			return err
+		}
+		if !resp.Success {
+			return fmt.Errorf("cloudflare: %v", resp.Errors)
+		}
+		return nil
+	}
+
+	existing := records[0]
+	if existing.Content == target && existing.Proxied == proxied {
+		return nil
+	}
+
+	var resp apiResponse[DNSRecord]
+	path := fmt.Sprintf("/zones/%s/dns_records/%s", zoneID, existing.ID)
+	if err := c.doRequest(ctx, "PUT", path, record, &resp); err != nil {
+		return err
+	}
+	if !resp.Success {
+		return fmt.Errorf("cloudflare: %v", resp.Errors)
+	}
+	return nil
 }
 
 func (c *Client) doRequest(ctx context.Context, method, path string, body any, result any) error {

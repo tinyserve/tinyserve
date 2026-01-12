@@ -109,7 +109,7 @@ commands:
   launchd status               show launchd agent status
 
 remote:
-  remote enable --hostname H   enable remote API and web UI via Cloudflare Tunnel
+  remote enable --hostname H [--cloudflare]   enable remote access (--cloudflare to setup DNS/tunnel)
   remote disable               disable remote access
   remote token create [--name] create a deploy token
   remote token list            list all tokens
@@ -1092,6 +1092,7 @@ func cmdRemote(args []string) error {
 
 func cmdRemoteEnable(args []string) error {
 	var hostname string
+	var cloudflare bool
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
 		case "--hostname":
@@ -1100,6 +1101,8 @@ func cmdRemoteEnable(args []string) error {
 				return fmt.Errorf("--hostname requires a value")
 			}
 			hostname = args[i]
+		case "--cloudflare":
+			cloudflare = true
 		default:
 			return fmt.Errorf("unknown flag: %s", args[i])
 		}
@@ -1109,8 +1112,9 @@ func cmdRemoteEnable(args []string) error {
 	}
 
 	payload := map[string]any{
-		"enabled":  true,
-		"hostname": hostname,
+		"enabled":    true,
+		"hostname":   hostname,
+		"cloudflare": cloudflare,
 	}
 	body, _ := json.Marshal(payload)
 	req, err := http.NewRequest(http.MethodPost, apiBase()+"/remote/enable", bytes.NewReader(body))
@@ -1128,7 +1132,9 @@ func cmdRemoteEnable(args []string) error {
 		return fmt.Errorf("enable remote failed: %s (%s)", resp.Status, strings.TrimSpace(string(data)))
 	}
 	fmt.Printf("✓ Remote access enabled at %s\n", hostname)
-	fmt.Println("  Note: DNS and tunnel routing must be configured separately")
+	if cloudflare {
+		fmt.Println("  Cloudflare DNS and tunnel configured")
+	}
 	return nil
 }
 

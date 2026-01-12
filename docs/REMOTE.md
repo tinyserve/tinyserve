@@ -98,16 +98,18 @@ tinyserve remote token revoke <token-id>
 
 ## Setup Flow
 
-### 1. Enable remote access
+### 1. Enable remote access (with Cloudflare)
 
 ```bash
-tinyserve remote enable --hostname admin.example.com
+tinyserve remote enable --hostname admin.example.com --cloudflare
 ```
 
-This will:
-- Add `admin.example.com → localhost:7070` to cloudflared config
-- Create DNS record via Cloudflare API
-- Redeploy cloudflared container
+This automatically:
+- Creates a DNS CNAME record (`admin.example.com → <tunnel-id>.cfargotunnel.com`) via Cloudflare API
+- Adds the hostname to cloudflared ingress config
+- Restarts the cloudflared container with the new config
+
+**Note:** Requires `tinyserve init` to have been run first to configure the Cloudflare tunnel.
 
 ### 2. Create deploy token
 

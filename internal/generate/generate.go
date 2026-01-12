@@ -123,7 +123,11 @@ func writeCloudflared(path string, s state.State, hostnames []string) error {
 	sort.Strings(hostnames)
 
 	var sb strings.Builder
-	sb.WriteString("tunnel: YOUR_TUNNEL_ID\n")
+	tunnelID := s.Settings.Tunnel.TunnelID
+	if tunnelID == "" {
+		tunnelID = "YOUR_TUNNEL_ID"
+	}
+	sb.WriteString(fmt.Sprintf("tunnel: %s\n", tunnelID))
 	if s.Settings.Tunnel.Mode == state.TunnelModeCredentialsFile && s.Settings.Tunnel.CredentialsFile != "" {
 		sb.WriteString(fmt.Sprintf("credentials-file: %s\n", s.Settings.Tunnel.CredentialsFile))
 	} else {
@@ -271,6 +275,9 @@ func collectHostnames(s state.State) []string {
 		} else if domain != "" && svc.Name != "" {
 			hosts = append(hosts, fmt.Sprintf("%s.%s", sanitizeName(svc.Name), domain))
 		}
+	}
+	if s.Settings.Remote.Enabled && s.Settings.Remote.Hostname != "" {
+		hosts = append(hosts, s.Settings.Remote.Hostname)
 	}
 	return unique(hosts)
 }

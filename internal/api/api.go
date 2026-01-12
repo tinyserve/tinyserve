@@ -106,12 +106,22 @@ func (h *Handler) handleStatus(w http.ResponseWriter, r *http.Request) {
 	proxy := summarizeContainer(statusMap["traefik"])
 	tunnel := summarizeContainer(statusMap["cloudflared"])
 
+	var tunnelConfig map[string]any
+	if st.Settings.Tunnel.TunnelID != "" {
+		tunnelConfig = map[string]any{
+			"id":     st.Settings.Tunnel.TunnelID,
+			"name":   st.Settings.Tunnel.TunnelName,
+			"domain": st.Settings.DefaultDomain,
+		}
+	}
+
 	resp := map[string]any{
 		"status":               "ok",
 		"service_count":        len(st.Services),
 		"updated_at":           st.UpdatedAt.Format(time.RFC3339),
 		"proxy":                proxy,
 		"tunnel":               tunnel,
+		"tunnel_config":        tunnelConfig,
 		"has_cloudflare_token": st.Settings.CloudflareAPIToken != "",
 	}
 	writeJSON(w, resp)
@@ -777,6 +787,52 @@ func copyDir(src, dst string) error {
 	})
 }
 
+// applyConfig generates new config, starts specified containers, waits for health, and promotes staging.
+// If targets is empty, all services are started.
+func (h *Handler) applyConfig(ctx context.Context, st state.State, targets []string, timeout time.Duration) error {
+	out, err := generate.GenerateBaseFiles(ctx, st, h.GeneratedRoot)
+	if err != nil {
+		return fmt.Errorf("generate: %w", err)
+	}
+
+	runner := docker.NewRunner(out.StagingDir)
+
+	if _, err := runner.Pull(ctx, targets...); err != nil && !strings.Contains(err.Error(), "No such service") {
+		return fmt.Errorf("docker pull: %w", err)
+	}
+
+	ts := time.Now().UTC().Format("20060102-150405")
+	if err := h.backupState(ts); err != nil {
+		return fmt.Errorf("backup state: %w", err)
+	}
+	if err := h.backupCurrentConfig(ts); err != nil {
+		return fmt.Errorf("backup config: %w", err)
+	}
+
+	if _, err := runner.Up(ctx, targets...); err != nil {
+		return fmt.Errorf("docker up: %w", err)
+	}
+
+	if err := runner.WaitHealthy(ctx, targets, timeout); err != nil {
+		if rbErr := h.rollbackFromBackup(ctx, ts); rbErr != nil {
+			return fmt.Errorf("health check failed: %v; rollback also failed: %v", err, rbErr)
+		}
+		return fmt.Errorf("health check failed, rolled back: %w", err)
+	}
+
+	if err := h.promote(out.StagingDir, ts); err != nil {
+		return fmt.Errorf("promote staging: %w", err)
+	}
+
+	maxBackups := st.Settings.MaxBackups
+	if maxBackups == 0 {
+		maxBackups = 10
+	}
+	_ = h.pruneBackups(maxBackups)
+
+	return nil
+}
+
 // pruneBackups removes old backups keeping only the most recent maxKeep.
 func (h *Handler) pruneBackups(maxKeep int) error {
 	if maxKeep <= 0 {
@@ -1144,8 +1200,9 @@ func (h *Handler) handleRevokeToken(w http.ResponseWriter, r *http.Request, id s
 }
 
 type remoteEnableRequest struct {
-	Enabled  bool   `json:"enabled"`
-	Hostname string `json:"hostname"`
+	Enabled    bool   `json:"enabled"`
+	Hostname   string `json:"hostname"`
+	Cloudflare bool   `json:"cloudflare"` // If true, setup DNS and tunnel via Cloudflare API
 }
 
 func (h *Handler) handleRemoteEnable(w http.ResponseWriter, r *http.Request) {
@@ -1178,18 +1235,54 @@ func (h *Handler) handleRemoteEnable(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Update state
 	st.Settings.Remote.Enabled = true
 	st.Settings.Remote.Hostname = req.Hostname
+
+	// If --cloudflare flag is set, setup DNS and tunnel
+	if req.Cloudflare {
+		// Ensure tunnel is configured (via /init)
+		if st.Settings.CloudflareAPIToken == "" ||
+			st.Settings.Tunnel.TunnelID == "" {
+			http.Error(w, "cloudflare tunnel not initialized; run tinyserve init first", http.StatusBadRequest)
+			return
+		}
+
+		// Create DNS CNAME record pointing to tunnel
+		cfClient := cloudflare.NewClient(st.Settings.CloudflareAPIToken)
+
+		zoneID, err := cfClient.GetZoneID(ctx, req.Hostname)
+		if err != nil {
+			http.Error(w, fmt.Sprintf("get zone ID: %v", err), http.StatusBadRequest)
+			return
+		}
+
+		target := fmt.Sprintf("%s.cfargotunnel.com", st.Settings.Tunnel.TunnelID)
+		if err := cfClient.EnsureCNAME(ctx, zoneID, req.Hostname, target, true); err != nil {
+			http.Error(w, fmt.Sprintf("configure DNS: %v", err), http.StatusInternalServerError)
+			return
+		}
+
+		// Regenerate config and restart cloudflared
+		if err := h.applyConfig(ctx, st, []string{"cloudflared"}, 60*time.Second); err != nil {
+			http.Error(w, fmt.Sprintf("apply config: %v", err), http.StatusInternalServerError)
+			return
+		}
+	}
 
 	if err := h.Store.Save(ctx, st); err != nil {
 		http.Error(w, fmt.Sprintf("save state: %v", err), http.StatusInternalServerError)
 		return
 	}
 
-	writeJSON(w, map[string]any{
+	resp := map[string]any{
 		"status":   "enabled",
 		"hostname": req.Hostname,
-	})
+	}
+	if req.Cloudflare {
+		resp["cloudflare"] = "configured"
+	}
+	writeJSON(w, resp)
 }
 
 func (h *Handler) handleRemoteDisable(w http.ResponseWriter, r *http.Request) {

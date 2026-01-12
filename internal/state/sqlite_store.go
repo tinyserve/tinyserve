@@ -15,7 +15,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const schemaVersion = 1
+const schemaVersion = 3
 
 const schema = `
 CREATE TABLE IF NOT EXISTS schema_version (
@@ -34,6 +34,10 @@ CREATE TABLE IF NOT EXISTS settings (
 	tunnel_account_id TEXT,
 	ui_local_port INTEGER NOT NULL DEFAULT 7070,
 	max_backups INTEGER DEFAULT 10,
+	cloudflare_api_token TEXT,
+	remote_enabled INTEGER NOT NULL DEFAULT 0,
+	remote_hostname TEXT,
+	remote_browser_auth TEXT,
 	created_at TEXT NOT NULL,
 	updated_at TEXT NOT NULL
 );
@@ -55,6 +59,14 @@ CREATE TABLE IF NOT EXISTS services (
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_services_name ON services(name);
+
+CREATE TABLE IF NOT EXISTS tokens (
+	id TEXT PRIMARY KEY,
+	name TEXT NOT NULL,
+	hash TEXT NOT NULL,
+	created_at TEXT NOT NULL,
+	last_used TEXT
+);
 `
 
 type SQLiteStore struct {
@@ -100,8 +112,31 @@ func (s *SQLiteStore) migrate() error {
 		return nil
 	}
 
-	if _, err := s.db.Exec(schema); err != nil {
-		return fmt.Errorf("create schema: %w", err)
+	// Fresh install: create all tables
+	if version == 0 {
+		if _, err := s.db.Exec(schema); err != nil {
+			return fmt.Errorf("create schema: %w", err)
+		}
+	}
+
+	// Incremental migrations
+	if version < 2 {
+		// v2: add tokens table
+		_, _ = s.db.Exec(`CREATE TABLE IF NOT EXISTS tokens (
+			id TEXT PRIMARY KEY,
+			name TEXT NOT NULL,
+			hash TEXT NOT NULL,
+			created_at TEXT NOT NULL,
+			last_used TEXT
+		)`)
+	}
+
+	if version < 3 {
+		// v3: add cloudflare_api_token and remote settings to settings table
+		_, _ = s.db.Exec(`ALTER TABLE settings ADD COLUMN cloudflare_api_token TEXT`)
+		_, _ = s.db.Exec(`ALTER TABLE settings ADD COLUMN remote_enabled INTEGER NOT NULL DEFAULT 0`)
+		_, _ = s.db.Exec(`ALTER TABLE settings ADD COLUMN remote_hostname TEXT`)
+		_, _ = s.db.Exec(`ALTER TABLE settings ADD COLUMN remote_browser_auth TEXT`)
 	}
 
 	if _, err := s.db.Exec(`INSERT OR REPLACE INTO schema_version (version) VALUES (?)`, schemaVersion); err != nil {
@@ -127,12 +162,16 @@ func (s *SQLiteStore) Load(ctx context.Context) (State, error) {
 
 	var createdAt, updatedAt string
 	var tunnelToken, tunnelCredFile, tunnelID, tunnelName, tunnelAccountID, defaultDomain sql.NullString
+	var cloudflareAPIToken, remoteHostname, remoteBrowserAuth sql.NullString
 	var maxBackups sql.NullInt64
+	var remoteEnabled int
 
 	err := s.db.QueryRowContext(ctx, `
 		SELECT compose_project_name, default_domain, tunnel_mode, tunnel_token, 
 		       tunnel_credentials_file, tunnel_id, tunnel_name, tunnel_account_id,
-		       ui_local_port, max_backups, created_at, updated_at
+		       ui_local_port, max_backups, cloudflare_api_token,
+		       remote_enabled, remote_hostname, remote_browser_auth,
+		       created_at, updated_at
 		FROM settings WHERE id = 1
 	`).Scan(
 		&st.Settings.ComposeProjectName,
@@ -145,6 +184,10 @@ func (s *SQLiteStore) Load(ctx context.Context) (State, error) {
 		&tunnelAccountID,
 		&st.Settings.UILocalPort,
 		&maxBackups,
+		&cloudflareAPIToken,
+		&remoteEnabled,
+		&remoteHostname,
+		&remoteBrowserAuth,
 		&createdAt,
 		&updatedAt,
 	)
@@ -161,6 +204,12 @@ func (s *SQLiteStore) Load(ctx context.Context) (State, error) {
 	st.Settings.Tunnel.TunnelID = tunnelID.String
 	st.Settings.Tunnel.TunnelName = tunnelName.String
 	st.Settings.Tunnel.AccountID = tunnelAccountID.String
+	st.Settings.CloudflareAPIToken = cloudflareAPIToken.String
+	st.Settings.Remote.Enabled = remoteEnabled == 1
+	st.Settings.Remote.Hostname = remoteHostname.String
+	if remoteBrowserAuth.Valid && remoteBrowserAuth.String != "" {
+		_ = json.Unmarshal([]byte(remoteBrowserAuth.String), &st.Settings.Remote.BrowserAuth)
+	}
 	if maxBackups.Valid {
 		st.Settings.MaxBackups = int(maxBackups.Int64)
 	}
@@ -222,7 +271,41 @@ func (s *SQLiteStore) Load(ctx context.Context) (State, error) {
 		st.Services = append(st.Services, svc)
 	}
 
-	return st, rows.Err()
+	if err := rows.Err(); err != nil {
+		return State{}, err
+	}
+
+	// Load tokens
+	tokenRows, err := s.db.QueryContext(ctx, `
+		SELECT id, name, hash, created_at, last_used FROM tokens
+	`)
+	if err != nil {
+		return State{}, fmt.Errorf("load tokens: %w", err)
+	}
+	defer tokenRows.Close()
+
+	for tokenRows.Next() {
+		var tok APIToken
+		var createdAtStr string
+		var lastUsed sql.NullString
+
+		if err := tokenRows.Scan(&tok.ID, &tok.Name, &tok.Hash, &createdAtStr, &lastUsed); err != nil {
+			return State{}, fmt.Errorf("scan token: %w", err)
+		}
+
+		if t, err := time.Parse(time.RFC3339Nano, createdAtStr); err == nil {
+			tok.CreatedAt = t
+		}
+		if lastUsed.Valid && lastUsed.String != "" {
+			if t, err := time.Parse(time.RFC3339Nano, lastUsed.String); err == nil {
+				tok.LastUsed = &t
+			}
+		}
+
+		st.Tokens = append(st.Tokens, tok)
+	}
+
+	return st, tokenRows.Err()
 }
 
 func (s *SQLiteStore) Save(ctx context.Context, st State) error {
@@ -245,11 +328,22 @@ func (s *SQLiteStore) Save(ctx context.Context, st State) error {
 	}
 	defer tx.Rollback()
 
+	remoteEnabled := 0
+	if st.Settings.Remote.Enabled {
+		remoteEnabled = 1
+	}
+	var remoteBrowserAuth []byte
+	if st.Settings.Remote.BrowserAuth.Type != "" {
+		remoteBrowserAuth, _ = json.Marshal(st.Settings.Remote.BrowserAuth)
+	}
+
 	_, err = tx.ExecContext(ctx, `
 		INSERT INTO settings (id, compose_project_name, default_domain, tunnel_mode, 
 		                      tunnel_token, tunnel_credentials_file, tunnel_id, tunnel_name,
-		                      tunnel_account_id, ui_local_port, max_backups, created_at, updated_at)
-		VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		                      tunnel_account_id, ui_local_port, max_backups, cloudflare_api_token,
+		                      remote_enabled, remote_hostname, remote_browser_auth,
+		                      created_at, updated_at)
+		VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
 			compose_project_name = excluded.compose_project_name,
 			default_domain = excluded.default_domain,
@@ -261,6 +355,10 @@ func (s *SQLiteStore) Save(ctx context.Context, st State) error {
 			tunnel_account_id = excluded.tunnel_account_id,
 			ui_local_port = excluded.ui_local_port,
 			max_backups = excluded.max_backups,
+			cloudflare_api_token = excluded.cloudflare_api_token,
+			remote_enabled = excluded.remote_enabled,
+			remote_hostname = excluded.remote_hostname,
+			remote_browser_auth = excluded.remote_browser_auth,
 			updated_at = excluded.updated_at
 	`,
 		st.Settings.ComposeProjectName,
@@ -273,6 +371,10 @@ func (s *SQLiteStore) Save(ctx context.Context, st State) error {
 		nullString(st.Settings.Tunnel.AccountID),
 		st.Settings.UILocalPort,
 		st.Settings.MaxBackups,
+		nullString(st.Settings.CloudflareAPIToken),
+		remoteEnabled,
+		nullString(st.Settings.Remote.Hostname),
+		nullString(string(remoteBrowserAuth)),
 		st.CreatedAt.Format(time.RFC3339Nano),
 		st.UpdatedAt.Format(time.RFC3339Nano),
 	)
@@ -345,6 +447,52 @@ func (s *SQLiteStore) Save(ctx context.Context, st State) error {
 		)
 		if err != nil {
 			return fmt.Errorf("upsert service %s: %w", svc.Name, err)
+		}
+	}
+
+	// Handle tokens: delete removed, upsert existing
+	var existingTokenIDs []string
+	tokenRows, err := tx.QueryContext(ctx, "SELECT id FROM tokens")
+	if err != nil {
+		return fmt.Errorf("query existing tokens: %w", err)
+	}
+	for tokenRows.Next() {
+		var id string
+		tokenRows.Scan(&id)
+		existingTokenIDs = append(existingTokenIDs, id)
+	}
+	tokenRows.Close()
+
+	newTokenIDs := make(map[string]bool)
+	for _, tok := range st.Tokens {
+		newTokenIDs[tok.ID] = true
+	}
+	for _, id := range existingTokenIDs {
+		if !newTokenIDs[id] {
+			if _, err := tx.ExecContext(ctx, "DELETE FROM tokens WHERE id = ?", id); err != nil {
+				return fmt.Errorf("delete token %s: %w", id, err)
+			}
+		}
+	}
+
+	for _, tok := range st.Tokens {
+		var lastUsed sql.NullString
+		if tok.LastUsed != nil {
+			lastUsed = sql.NullString{String: tok.LastUsed.Format(time.RFC3339Nano), Valid: true}
+		}
+
+		_, err = tx.ExecContext(ctx, `
+			INSERT INTO tokens (id, name, hash, created_at, last_used)
+			VALUES (?, ?, ?, ?, ?)
+			ON CONFLICT(id) DO UPDATE SET
+				name = excluded.name,
+				hash = excluded.hash,
+				last_used = excluded.last_used
+		`,
+			tok.ID, tok.Name, tok.Hash, tok.CreatedAt.Format(time.RFC3339Nano), lastUsed,
+		)
+		if err != nil {
+			return fmt.Errorf("upsert token %s: %w", tok.ID, err)
 		}
 	}
 

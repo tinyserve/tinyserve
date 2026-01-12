@@ -28,3 +28,4 @@
   - `tinyserve backup restore <timestamp>` — download and restore from S3.
   - `tinyserve backup schedule` — configure periodic backups via launchd.
   - WAL shipping for near real-time SQLite backup (continuous mode).
+- [ ] Notifications: add Telegram notifications when server deployed or deployment failed.
