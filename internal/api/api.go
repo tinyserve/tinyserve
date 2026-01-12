@@ -155,6 +155,27 @@ func (h *Handler) handleServices(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func (h *Handler) handleServicesReadOnly(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	h.handleServices(w, r)
+}
+
+// Exported wrappers for UI-only mux in tinyserved.
+func (h *Handler) HandleStatus(w http.ResponseWriter, r *http.Request) {
+	h.handleStatus(w, r)
+}
+
+func (h *Handler) HandleServicesReadOnly(w http.ResponseWriter, r *http.Request) {
+	h.handleServicesReadOnly(w, r)
+}
+
+func (h *Handler) HandleMe(w http.ResponseWriter, r *http.Request) {
+	h.handleMe(w, r)
+}
+
 type addServiceRequest struct {
 	ID           string                    `json:"id,omitempty"`
 	Name         string                    `json:"name"`

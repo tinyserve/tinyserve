@@ -71,14 +71,29 @@ func run() error {
 		Handler: mux,
 	}
 
-	// Start server in goroutine
-	errChan := make(chan error, 1)
+	uiMux := http.NewServeMux()
+	uiMux.Handle("/status", browserAuth.Wrap(http.HandlerFunc(handler.HandleStatus)))
+	uiMux.Handle("/services", browserAuth.Wrap(http.HandlerFunc(handler.HandleServicesReadOnly)))
+	uiMux.Handle("/me", browserAuth.Wrap(http.HandlerFunc(handler.HandleMe)))
+	uiMux.Handle("/", browserAuth.Wrap(webui.Handler()))
+	uiServer := &http.Server{
+		Addr:    uiAddr(),
+		Handler: uiMux,
+	}
+
+	// Start servers in goroutines
+	errChan := make(chan error, 2)
 	go func() {
 		log.Printf("tinyserved listening on %s (state: %s)", server.Addr, filepath.Join(dataDir, "state.db"))
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			errChan <- err
 		}
-		close(errChan)
+	}()
+	go func() {
+		log.Printf("tinyserved ui listening on %s", uiServer.Addr)
+		if err := uiServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			errChan <- err
+		}
 	}()
 
 	// Wait for shutdown signal or server error
@@ -89,6 +104,9 @@ func run() error {
 		defer shutdownCancel()
 		if err := server.Shutdown(shutdownCtx); err != nil {
 			return fmt.Errorf("shutdown: %w", err)
+		}
+		if err := uiServer.Shutdown(shutdownCtx); err != nil {
+			return fmt.Errorf("shutdown ui: %w", err)
 		}
 		log.Println("shutdown complete")
 		return nil
@@ -120,4 +138,11 @@ func ensureDataDir() (string, error) {
 	}
 
 	return dataDir, nil
+}
+
+func uiAddr() string {
+	if v := os.Getenv("TINYSERVE_UI_ADDR"); v != "" {
+		return v
+	}
+	return "0.0.0.0:7071"
 }

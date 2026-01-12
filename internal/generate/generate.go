@@ -3,6 +3,7 @@ package generate
 import (
 	"context"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -95,6 +96,8 @@ func writeCompose(path string, s state.State) error {
     volumes:
       - ./cloudflared:/etc/cloudflared
     networks: [edge]
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
 `)
 
 	sb.WriteString(fmt.Sprintf(`  whoami:
@@ -140,7 +143,11 @@ func writeCloudflared(path string, s state.State, hostnames []string) error {
 	}
 	sb.WriteString("ingress:\n")
 	for _, h := range hostnames {
-		sb.WriteString(fmt.Sprintf("  - hostname: %s\n    service: http://traefik:80\n", h))
+		service := "http://traefik:80"
+		if s.Settings.Remote.Enabled && s.Settings.Remote.Hostname != "" && h == s.Settings.Remote.Hostname {
+			service = fmt.Sprintf("http://host.docker.internal:%s", uiProxyPort())
+		}
+		sb.WriteString(fmt.Sprintf("  - hostname: %s\n    service: %s\n", h, service))
 	}
 	sb.WriteString("  - service: http_status:404\n")
 	return os.WriteFile(path, []byte(sb.String()), 0o600)
@@ -259,6 +266,18 @@ func sanitizeName(name string) string {
 	name = nameSanitizer.ReplaceAllString(name, "-")
 	name = strings.Trim(name, "-")
 	return name
+}
+
+func uiProxyPort() string {
+	addr := os.Getenv("TINYSERVE_UI_ADDR")
+	if addr == "" {
+		return "7071"
+	}
+	_, port, err := net.SplitHostPort(addr)
+	if err != nil || port == "" {
+		return "7071"
+	}
+	return port
 }
 
 func collectHostnames(s state.State) []string {
