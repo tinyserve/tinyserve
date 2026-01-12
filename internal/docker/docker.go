@@ -1,6 +1,7 @@
 package docker
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -47,8 +48,24 @@ func (r *Runner) PSStatus(ctx context.Context) ([]ContainerStatus, string, error
 		return nil, out, err
 	}
 	var containers []ContainerStatus
-	if err := json.Unmarshal([]byte(out), &containers); err != nil {
-		return nil, out, fmt.Errorf("parse compose ps json: %w", err)
+	if err := json.Unmarshal([]byte(out), &containers); err == nil {
+		return containers, out, nil
+	}
+	// Fallback: docker compose can emit JSON objects per line.
+	scanner := bufio.NewScanner(strings.NewReader(out))
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" {
+			continue
+		}
+		var c ContainerStatus
+		if err := json.Unmarshal([]byte(line), &c); err != nil {
+			return nil, out, fmt.Errorf("parse compose ps json: %w", err)
+		}
+		containers = append(containers, c)
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, out, fmt.Errorf("read compose ps json: %w", err)
 	}
 	return containers, out, nil
 }
@@ -81,15 +98,17 @@ func (r *Runner) WaitHealthy(ctx context.Context, services []string, timeout tim
 					continue
 				}
 
-				// Check state is running
-				if c.State != "running" {
+				// Check state is running (compose may append extra info)
+				state := strings.ToLower(c.State)
+				if !strings.HasPrefix(state, "running") {
 					allHealthy = false
 					break
 				}
 
 				// If container has health check, it must be healthy
 				// Health field is empty string if no healthcheck defined
-				if c.Health != "" && c.Health != "healthy" {
+				health := strings.ToLower(c.Health)
+				if health != "" && health != "healthy" {
 					allHealthy = false
 					break
 				}

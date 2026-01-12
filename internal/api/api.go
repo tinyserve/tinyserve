@@ -356,6 +356,7 @@ func (h *Handler) handleDeploy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	start := time.Now()
 	var req deployRequest
 	if r.Body != nil {
 		_ = json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<16)).Decode(&req)
@@ -366,6 +367,7 @@ func (h *Handler) handleDeploy(w http.ResponseWriter, r *http.Request) {
 	if req.TimeoutMs > 0 {
 		timeout = time.Duration(req.TimeoutMs) * time.Millisecond
 	}
+	log.Printf("deploy: request received (service=%q services=%v timeout=%s)", req.Service, req.Services, timeout)
 
 	ctx := r.Context()
 	st, err := h.Store.Load(ctx)
@@ -375,6 +377,7 @@ func (h *Handler) handleDeploy(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Generate staging config from full state.
+	log.Printf("deploy: generating config")
 	out, err := generate.GenerateBaseFiles(ctx, st, h.GeneratedRoot)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("generate: %v", err), http.StatusInternalServerError)
@@ -393,11 +396,14 @@ func (h *Handler) handleDeploy(w http.ResponseWriter, r *http.Request) {
 	} else if req.Service != "" {
 		targets = append(targets, sanitizeName(req.Service))
 	}
+	log.Printf("deploy: targets=%v", targets)
 
+	log.Printf("deploy: docker pull start")
 	if _, err := runner.Pull(ctx, targets...); err != nil && !strings.Contains(err.Error(), "No such service") {
 		http.Error(w, fmt.Sprintf("docker pull: %v", err), http.StatusInternalServerError)
 		return
 	}
+	log.Printf("deploy: docker pull complete")
 
 	// Backup current state and config before applying changes
 	ts := time.Now().UTC().Format("20060102-150405")
@@ -411,12 +417,15 @@ func (h *Handler) handleDeploy(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Start containers
+	log.Printf("deploy: docker up start")
 	if _, err := runner.Up(ctx, targets...); err != nil {
 		http.Error(w, fmt.Sprintf("docker up: %v", err), http.StatusInternalServerError)
 		return
 	}
+	log.Printf("deploy: docker up complete")
 
 	// Wait for services to become healthy
+	log.Printf("deploy: wait healthy start")
 	if err := runner.WaitHealthy(ctx, targets, timeout); err != nil {
 		// Health check failed - rollback to previous config
 		rollbackErr := h.rollbackFromBackup(ctx, ts)
@@ -427,8 +436,10 @@ func (h *Handler) handleDeploy(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("health check failed, rolled back: %v", err), http.StatusInternalServerError)
 		return
 	}
+	log.Printf("deploy: wait healthy complete")
 
 	// Health check passed - promote staging to current
+	log.Printf("deploy: promote staging")
 	if err := h.promote(out.StagingDir, ts); err != nil {
 		http.Error(w, fmt.Sprintf("promote staging: %v", err), http.StatusInternalServerError)
 		return
@@ -457,6 +468,7 @@ func (h *Handler) handleDeploy(w http.ResponseWriter, r *http.Request) {
 		"time":   now.Format(time.RFC3339),
 	}
 	writeJSON(w, resp)
+	log.Printf("deploy: complete (duration=%s)", time.Since(start))
 }
 
 func (h *Handler) handleRollback(w http.ResponseWriter, r *http.Request) {

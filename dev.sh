@@ -24,6 +24,4 @@ if command -v pgrep >/dev/null 2>&1; then
 fi
 
 echo "Starting tinyserved..."
-nohup "$root/tinyserved" >/tmp/tinyserved.log 2>/tmp/tinyserved.err &
-echo "tinyserved started (pid $!)"
-echo "logs: tail -f /tmp/tinyserved.log"
+exec "$root/tinyserved"
