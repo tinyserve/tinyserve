@@ -744,7 +744,23 @@ func cmdChecklist() error {
 		allPassed = false
 	}
 
-	// 5. Check launchd agent loaded (CLI or brew services)
+	// 5. Check FileVault disk encryption (macOS)
+	fmt.Print("FileVault encryption.......... ")
+	if runtime.GOOS == "darwin" {
+		cmd = exec.Command("fdesetup", "status")
+		output, err := cmd.Output()
+		if err != nil {
+			fmt.Println("? (cannot check)")
+		} else if strings.Contains(string(output), "FileVault is On") {
+			fmt.Println("✓")
+		} else {
+			fmt.Println("⚠ OFF (secrets stored unencrypted)")
+		}
+	} else {
+		fmt.Println("- (macOS only)")
+	}
+
+	// 6. Check launchd agent loaded (CLI or brew services)
 	fmt.Print("launchd agent loaded.......... ")
 	cmd = exec.Command("launchctl", "list")
 	output, err := cmd.Output()

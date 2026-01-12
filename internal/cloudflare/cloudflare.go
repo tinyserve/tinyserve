@@ -38,13 +38,13 @@ type Account struct {
 
 // Tunnel represents a Cloudflare Tunnel.
 type Tunnel struct {
-	ID          string `json:"id"`
-	Name        string `json:"name"`
-	AccountTag  string `json:"account_tag"`
-	CreatedAt   string `json:"created_at"`
-	DeletedAt   string `json:"deleted_at,omitempty"`
-	Status      string `json:"status"`
-	Credentials string `json:"credentials_file,omitempty"`
+	ID          string          `json:"id"`
+	Name        string          `json:"name"`
+	AccountTag  string          `json:"account_tag"`
+	CreatedAt   string          `json:"created_at"`
+	DeletedAt   string          `json:"deleted_at,omitempty"`
+	Status      string          `json:"status"`
+	Credentials json.RawMessage `json:"credentials_file,omitempty"`
 }
 
 // TunnelCredentials contains the credentials for a tunnel.
