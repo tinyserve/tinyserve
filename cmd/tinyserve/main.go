@@ -99,6 +99,7 @@ commands:
        [--cloudflare-api-token T] [--default-domain D] [--tunnel-name N] [--account-id ID] [--skip-cloudflare]
   service add --image [--name N] [--port P] [--hostname h] [--env K=V] [--env-file .env]
                [--mem MB] [--volume host:container] [--healthcheck "CMD ..."]
+               [--cloudflare] [--deploy] [--timeout SEC]
   service list                 list all services
   service remove --name NAME   remove a service
   deploy [--service NAME]... [--timeout SEC]  pull, restart, and wait for health
@@ -315,6 +316,7 @@ func cmdServiceAdd(args []string) error {
 		"resources": map[string]any{
 			"memory_limit_mb": opts.Memory,
 		},
+		"cloudflare": opts.Cloudflare,
 	}
 	if opts.Healthcheck != "" {
 		payload["healthcheck"] = map[string]any{
@@ -342,7 +344,27 @@ func cmdServiceAdd(args []string) error {
 	}
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", "  ")
-	return enc.Encode(out)
+	if err := enc.Encode(out); err != nil {
+		return err
+	}
+
+	// If --deploy flag is set, deploy the service and infrastructure
+	if opts.Deploy {
+		serviceName, _ := out["name"].(string)
+		fmt.Println("Deploying service...")
+		timeoutSec := opts.Timeout
+		if timeoutSec == 0 {
+			timeoutSec = 60
+		}
+		// Deploy infrastructure (traefik, cloudflared) and the new service
+		services := []string{"traefik", "cloudflared", serviceName}
+		if _, err := doDeploy(services, timeoutSec); err != nil {
+			return fmt.Errorf("service added but deploy failed: %w", err)
+		}
+		fmt.Printf("✓ Service %s deployed\n", serviceName)
+	}
+
+	return nil
 }
 
 func cmdServiceList() error {
@@ -428,6 +450,9 @@ type addOptions struct {
 	Volumes     []string
 	Healthcheck string
 	Memory      int
+	Cloudflare  bool
+	Deploy      bool
+	Timeout     int
 }
 
 func parseServiceAdd(args []string) (addOptions, error) {
@@ -509,12 +534,29 @@ func parseServiceAdd(args []string) (addOptions, error) {
 				return opts, fmt.Errorf("--healthcheck requires a command")
 			}
 			opts.Healthcheck = args[i]
+		case "--cloudflare":
+			opts.Cloudflare = true
+		case "--deploy":
+			opts.Deploy = true
+		case "--timeout":
+			i++
+			if i >= len(args) {
+				return opts, fmt.Errorf("--timeout requires a value in seconds")
+			}
+			t, err := strconv.Atoi(args[i])
+			if err != nil {
+				return opts, fmt.Errorf("invalid timeout: %w", err)
+			}
+			opts.Timeout = t
 		default:
 			return opts, fmt.Errorf("unknown flag: %s", args[i])
 		}
 	}
 	if opts.Image == "" {
 		return opts, fmt.Errorf("--image is required")
+	}
+	if opts.Timeout > 0 && !opts.Deploy {
+		return opts, fmt.Errorf("--timeout requires --deploy")
 	}
 	return opts, nil
 }

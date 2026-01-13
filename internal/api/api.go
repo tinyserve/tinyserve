@@ -262,6 +262,7 @@ type addServiceRequest struct {
 	Healthcheck  *state.ServiceHealthcheck `json:"healthcheck,omitempty"`
 	Resources    state.ServiceResources    `json:"resources"`
 	Enabled      *bool                     `json:"enabled,omitempty"`
+	Cloudflare   bool                      `json:"cloudflare,omitempty"` // If true, setup DNS for auto-generated hostname
 }
 
 func (h *Handler) handleAddService(w http.ResponseWriter, r *http.Request) {
@@ -297,6 +298,21 @@ func (h *Handler) handleAddService(w http.ResponseWriter, r *http.Request) {
 	// Derive name from image if not specified
 	if svc.Name == "" {
 		svc.Name = nameFromImage(svc.Image)
+	}
+
+	// Load state early to access default_domain for auto-hostname generation
+	ctx := r.Context()
+	st, err := h.Store.Load(ctx)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("load state: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	// Auto-generate hostname if no hostname provided and default_domain is configured
+	if len(svc.Hostnames) == 0 && st.Settings.DefaultDomain != "" {
+		autoHostname := fmt.Sprintf("%s.%s", sanitizeName(svc.Name), st.Settings.DefaultDomain)
+		svc.Hostnames = []string{autoHostname}
+		log.Printf("add service: auto-generated hostname %q", autoHostname)
 	}
 
 	// Auto-detect port from image if not specified
@@ -387,12 +403,33 @@ func (h *Handler) handleAddService(w http.ResponseWriter, r *http.Request) {
 		svc.ID = fmt.Sprintf("%s-%d", sanitizeName(svc.Name), time.Now().Unix())
 	}
 
-	ctx := r.Context()
-	st, err := h.Store.Load(ctx)
-	if err != nil {
-		http.Error(w, fmt.Sprintf("load state: %v", err), http.StatusInternalServerError)
-		return
+	// If --cloudflare flag is set and we have auto-generated hostname, setup DNS
+	if payload.Cloudflare && len(svc.Hostnames) > 0 {
+		if st.Settings.CloudflareAPIToken == "" || st.Settings.Tunnel.TunnelID == "" {
+			http.Error(w, "cloudflare tunnel not initialized; run tinyserve init first", http.StatusBadRequest)
+			return
+		}
+
+		cfClient := cloudflare.NewClient(st.Settings.CloudflareAPIToken)
+		target := fmt.Sprintf("%s.cfargotunnel.com", st.Settings.Tunnel.TunnelID)
+
+		for _, hostname := range svc.Hostnames {
+			log.Printf("add service: looking up Cloudflare zone for %q", hostname)
+			zoneID, err := cfClient.GetZoneID(ctx, hostname)
+			if err != nil {
+				http.Error(w, fmt.Sprintf("get zone ID for %s: %v", hostname, err), http.StatusBadRequest)
+				return
+			}
+
+			log.Printf("add service: ensuring CNAME %q -> %q", hostname, target)
+			if err := cfClient.EnsureCNAME(ctx, zoneID, hostname, target, true); err != nil {
+				http.Error(w, fmt.Sprintf("configure DNS for %s: %v", hostname, err), http.StatusInternalServerError)
+				return
+			}
+		}
+		log.Printf("add service: Cloudflare DNS configured for %v", svc.Hostnames)
 	}
+
 	for _, existing := range st.Services {
 		if strings.EqualFold(existing.Name, svc.Name) {
 			http.Error(w, "service name already exists", http.StatusConflict)
