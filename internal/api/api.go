@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -43,24 +44,22 @@ func NewHandler(store state.Store, generatedRoot, backupsDir, statePath, cloudfl
 }
 
 func (h *Handler) RegisterRoutes(mux *http.ServeMux, browserAuth *BrowserAuthMiddleware) {
-	authMw := NewAuthMiddleware(h.Store)
-
 	mux.HandleFunc("/status", h.handleStatus)
 	mux.HandleFunc("/version", h.handleVersion)
-	mux.HandleFunc("/services", h.handleServicesWithAuth(authMw))
-	mux.HandleFunc("/services/", authMw.RequireToken(h.handleServiceByName)) // DELETE /services/{name}
-	mux.HandleFunc("/deploy", authMw.RequireToken(h.handleDeploy))
-	mux.HandleFunc("/rollback", authMw.RequireToken(h.handleRollback))
+	mux.HandleFunc("/services", h.handleServices)
+	mux.HandleFunc("/services/", h.handleServiceByName) // DELETE /services/{name}
+	mux.HandleFunc("/deploy", h.handleDeploy)
+	mux.HandleFunc("/rollback", h.handleRollback)
 	mux.HandleFunc("/logs", h.handleLogs)
-	mux.HandleFunc("/init", authMw.RequireToken(h.handleInit))
+	mux.HandleFunc("/init", h.handleInit)
 	mux.HandleFunc("/init/token", h.handleInitToken)
 	mux.HandleFunc("/health", h.handleHealth)
 
-	mux.HandleFunc("/tokens", authMw.RequireToken(h.handleTokens))
-	mux.HandleFunc("/tokens/", authMw.RequireToken(h.handleTokenByID))
+	mux.HandleFunc("/tokens", h.handleTokens)
+	mux.HandleFunc("/tokens/", h.handleTokenByID)
 
-	mux.HandleFunc("/remote/enable", authMw.RequireToken(h.handleRemoteEnable))
-	mux.HandleFunc("/remote/disable", authMw.RequireToken(h.handleRemoteDisable))
+	mux.HandleFunc("/remote/enable", h.handleRemoteEnable)
+	mux.HandleFunc("/remote/disable", h.handleRemoteDisable)
 
 	mux.Handle("/me", browserAuth.Wrap(http.HandlerFunc(h.handleMe)))
 }
@@ -174,6 +173,76 @@ func (h *Handler) HandleServicesReadOnly(w http.ResponseWriter, r *http.Request)
 
 func (h *Handler) HandleMe(w http.ResponseWriter, r *http.Request) {
 	h.handleMe(w, r)
+}
+
+func (h *Handler) HandleWebhookDeploy(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	serviceName, err := parseWebhookService(r.URL.Path)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	if _, status, msg := h.requireWebhookToken(r); status != 0 {
+		http.Error(w, msg, status)
+		return
+	}
+
+	timeout := 60 * time.Second
+	if q := r.URL.Query().Get("timeout"); q != "" {
+		if seconds, err := strconv.Atoi(q); err == nil && seconds > 0 {
+			timeout = time.Duration(seconds) * time.Second
+		} else {
+			http.Error(w, "invalid timeout", http.StatusBadRequest)
+			return
+		}
+	}
+
+	ctx := r.Context()
+	st, err := h.Store.Load(ctx)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("load state: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	serviceIdx := -1
+	for i, svc := range st.Services {
+		if strings.EqualFold(svc.Name, serviceName) {
+			serviceIdx = i
+			break
+		}
+	}
+	if serviceIdx == -1 {
+		http.Error(w, "service not found", http.StatusNotFound)
+		return
+	}
+	if !st.Services[serviceIdx].Enabled {
+		http.Error(w, "service disabled", http.StatusBadRequest)
+		return
+	}
+
+	target := sanitizeName(st.Services[serviceIdx].Name)
+	if err := h.applyConfig(ctx, st, []string{target}, timeout); err != nil {
+		http.Error(w, fmt.Sprintf("deploy failed: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	now := time.Now().UTC()
+	st.Services[serviceIdx].LastDeploy = &now
+	if err := h.Store.Save(ctx, st); err != nil {
+		http.Error(w, fmt.Sprintf("save state: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	writeJSON(w, map[string]any{
+		"status":  "deployed",
+		"service": st.Services[serviceIdx].Name,
+		"time":    now.Format(time.RFC3339),
+	})
 }
 
 type addServiceRequest struct {
@@ -1008,6 +1077,70 @@ func sanitizeName(name string) string {
 	return name
 }
 
+func parseWebhookService(path string) (string, error) {
+	const prefix = "/webhook/deploy/"
+	if !strings.HasPrefix(path, prefix) {
+		return "", fmt.Errorf("invalid webhook path")
+	}
+	raw := strings.TrimPrefix(path, prefix)
+	if raw == "" {
+		return "", fmt.Errorf("service is required")
+	}
+	// Disallow extra path segments.
+	if strings.Contains(raw, "/") {
+		return "", fmt.Errorf("invalid service path")
+	}
+	name, err := url.PathUnescape(raw)
+	if err != nil {
+		return "", fmt.Errorf("invalid service name")
+	}
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return "", fmt.Errorf("service is required")
+	}
+	return name, nil
+}
+
+func (h *Handler) requireWebhookToken(r *http.Request) (*state.APIToken, int, string) {
+	ctx := r.Context()
+	st, err := h.Store.Load(ctx)
+	if err != nil {
+		return nil, http.StatusInternalServerError, "internal error"
+	}
+	if len(st.Tokens) == 0 {
+		return nil, http.StatusUnauthorized, "no tokens configured"
+	}
+
+	authHeader := r.Header.Get("Authorization")
+	if authHeader == "" {
+		return nil, http.StatusUnauthorized, "authorization required"
+	}
+	if !strings.HasPrefix(authHeader, "Bearer ") {
+		return nil, http.StatusUnauthorized, "invalid authorization header"
+	}
+	token := strings.TrimPrefix(authHeader, "Bearer ")
+	if !auth.IsValidTokenFormat(token) {
+		return nil, http.StatusUnauthorized, "invalid token format"
+	}
+
+	var matchedToken *state.APIToken
+	for i := range st.Tokens {
+		if auth.VerifyToken(token, st.Tokens[i].Hash) {
+			matchedToken = &st.Tokens[i]
+			break
+		}
+	}
+	if matchedToken == nil {
+		return nil, http.StatusUnauthorized, "invalid token"
+	}
+
+	now := time.Now().UTC()
+	matchedToken.LastUsed = &now
+	_ = h.Store.Save(ctx, st)
+
+	return matchedToken, 0, ""
+}
+
 func copyFile(src, dst string) error {
 	in, err := os.Open(src)
 	if err != nil {
@@ -1242,9 +1375,11 @@ func (h *Handler) handleRevokeToken(w http.ResponseWriter, r *http.Request, id s
 }
 
 type remoteEnableRequest struct {
-	Enabled    bool   `json:"enabled"`
-	Hostname   string `json:"hostname"`
-	Cloudflare bool   `json:"cloudflare"` // If true, setup DNS and tunnel via Cloudflare API
+	Enabled     bool   `json:"enabled"`
+	Hostname    string `json:"hostname"`
+	UIHostname  string `json:"ui_hostname"`
+	APIHostname string `json:"api_hostname"`
+	Cloudflare  bool   `json:"cloudflare"` // If true, setup DNS and tunnel via Cloudflare API
 }
 
 func (h *Handler) handleRemoteEnable(w http.ResponseWriter, r *http.Request) {
@@ -1261,15 +1396,29 @@ func (h *Handler) handleRemoteEnable(w http.ResponseWriter, r *http.Request) {
 	}
 	log.Printf("remote enable: request received (hostname=%q cloudflare=%t)", req.Hostname, req.Cloudflare)
 
-	if req.Hostname == "" {
-		http.Error(w, "hostname is required", http.StatusBadRequest)
+	uiHostname := strings.TrimSpace(req.UIHostname)
+	if uiHostname == "" {
+		uiHostname = strings.TrimSpace(req.Hostname)
+	}
+	apiHostname := strings.TrimSpace(req.APIHostname)
+
+	if uiHostname == "" && apiHostname == "" {
+		http.Error(w, "ui_hostname or api_hostname is required", http.StatusBadRequest)
 		return
 	}
 
 	// Validate hostname format
-	if err := validate.Hostname(req.Hostname); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
+	if uiHostname != "" {
+		if err := validate.Hostname(uiHostname); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+	}
+	if apiHostname != "" {
+		if err := validate.Hostname(apiHostname); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
 	}
 
 	ctx := r.Context()
@@ -1281,11 +1430,13 @@ func (h *Handler) handleRemoteEnable(w http.ResponseWriter, r *http.Request) {
 
 	// Update state
 	st.Settings.Remote.Enabled = true
-	st.Settings.Remote.Hostname = req.Hostname
+	st.Settings.Remote.Hostname = uiHostname
+	st.Settings.Remote.UIHostname = uiHostname
+	st.Settings.Remote.APIHostname = apiHostname
 
 	// If --cloudflare flag is set, setup DNS and tunnel
 	if req.Cloudflare {
-		log.Printf("remote enable: starting Cloudflare setup (hostname=%q)", req.Hostname)
+		log.Printf("remote enable: starting Cloudflare setup (ui=%q api=%q)", uiHostname, apiHostname)
 		// Ensure tunnel is configured (via /init)
 		if st.Settings.CloudflareAPIToken == "" ||
 			st.Settings.Tunnel.TunnelID == "" {
@@ -1296,21 +1447,30 @@ func (h *Handler) handleRemoteEnable(w http.ResponseWriter, r *http.Request) {
 		// Create DNS CNAME record pointing to tunnel
 		cfClient := cloudflare.NewClient(st.Settings.CloudflareAPIToken)
 
-		log.Printf("remote enable: looking up Cloudflare zone for %q", req.Hostname)
-		zoneID, err := cfClient.GetZoneID(ctx, req.Hostname)
-		if err != nil {
-			http.Error(w, fmt.Sprintf("get zone ID: %v", err), http.StatusBadRequest)
-			return
+		hostnames := []string{}
+		if uiHostname != "" {
+			hostnames = append(hostnames, uiHostname)
 		}
-		log.Printf("remote enable: Cloudflare zone resolved (zone_id=%s)", zoneID)
-
+		if apiHostname != "" {
+			hostnames = append(hostnames, apiHostname)
+		}
 		target := fmt.Sprintf("%s.cfargotunnel.com", st.Settings.Tunnel.TunnelID)
-		log.Printf("remote enable: ensuring CNAME %q -> %q", req.Hostname, target)
-		if err := cfClient.EnsureCNAME(ctx, zoneID, req.Hostname, target, true); err != nil {
-			http.Error(w, fmt.Sprintf("configure DNS: %v", err), http.StatusInternalServerError)
-			return
+		for _, h := range hostnames {
+			log.Printf("remote enable: looking up Cloudflare zone for %q", h)
+			zoneID, err := cfClient.GetZoneID(ctx, h)
+			if err != nil {
+				http.Error(w, fmt.Sprintf("get zone ID: %v", err), http.StatusBadRequest)
+				return
+			}
+			log.Printf("remote enable: Cloudflare zone resolved (zone_id=%s)", zoneID)
+
+			log.Printf("remote enable: ensuring CNAME %q -> %q", h, target)
+			if err := cfClient.EnsureCNAME(ctx, zoneID, h, target, true); err != nil {
+				http.Error(w, fmt.Sprintf("configure DNS: %v", err), http.StatusInternalServerError)
+				return
+			}
 		}
-		log.Printf("remote enable: Cloudflare DNS configured (hostname=%q)", req.Hostname)
+		log.Printf("remote enable: Cloudflare DNS configured")
 
 		// Generate config but don't wait for docker (it can take too long on first pull)
 		// User can run `tinyserve deploy` to start containers
@@ -1337,13 +1497,19 @@ func (h *Handler) handleRemoteEnable(w http.ResponseWriter, r *http.Request) {
 
 	resp := map[string]any{
 		"status":   "enabled",
-		"hostname": req.Hostname,
+		"hostname": uiHostname,
+	}
+	if uiHostname != "" {
+		resp["ui_hostname"] = uiHostname
+	}
+	if apiHostname != "" {
+		resp["api_hostname"] = apiHostname
 	}
 	if req.Cloudflare {
 		resp["cloudflare"] = "configured"
 	}
 	writeJSON(w, resp)
-	log.Printf("remote enable: complete (hostname=%q cloudflare=%t duration=%s)", req.Hostname, req.Cloudflare, time.Since(start))
+	log.Printf("remote enable: complete (ui=%q api=%q cloudflare=%t duration=%s)", uiHostname, apiHostname, req.Cloudflare, time.Since(start))
 }
 
 func (h *Handler) handleRemoteDisable(w http.ResponseWriter, r *http.Request) {
@@ -1361,6 +1527,8 @@ func (h *Handler) handleRemoteDisable(w http.ResponseWriter, r *http.Request) {
 
 	st.Settings.Remote.Enabled = false
 	st.Settings.Remote.Hostname = ""
+	st.Settings.Remote.UIHostname = ""
+	st.Settings.Remote.APIHostname = ""
 
 	if err := h.Store.Save(ctx, st); err != nil {
 		http.Error(w, fmt.Sprintf("save state: %v", err), http.StatusInternalServerError)

@@ -15,7 +15,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const schemaVersion = 3
+const schemaVersion = 4
 
 const schema = `
 CREATE TABLE IF NOT EXISTS schema_version (
@@ -37,6 +37,8 @@ CREATE TABLE IF NOT EXISTS settings (
 	cloudflare_api_token TEXT,
 	remote_enabled INTEGER NOT NULL DEFAULT 0,
 	remote_hostname TEXT,
+	remote_ui_hostname TEXT,
+	remote_api_hostname TEXT,
 	remote_browser_auth TEXT,
 	created_at TEXT NOT NULL,
 	updated_at TEXT NOT NULL
@@ -139,6 +141,12 @@ func (s *SQLiteStore) migrate() error {
 		_, _ = s.db.Exec(`ALTER TABLE settings ADD COLUMN remote_browser_auth TEXT`)
 	}
 
+	if version < 4 {
+		// v4: add separate UI + API hostnames
+		_, _ = s.db.Exec(`ALTER TABLE settings ADD COLUMN remote_ui_hostname TEXT`)
+		_, _ = s.db.Exec(`ALTER TABLE settings ADD COLUMN remote_api_hostname TEXT`)
+	}
+
 	if _, err := s.db.Exec(`INSERT OR REPLACE INTO schema_version (version) VALUES (?)`, schemaVersion); err != nil {
 		return fmt.Errorf("set schema version: %w", err)
 	}
@@ -162,7 +170,7 @@ func (s *SQLiteStore) Load(ctx context.Context) (State, error) {
 
 	var createdAt, updatedAt string
 	var tunnelToken, tunnelCredFile, tunnelID, tunnelName, tunnelAccountID, defaultDomain sql.NullString
-	var cloudflareAPIToken, remoteHostname, remoteBrowserAuth sql.NullString
+	var cloudflareAPIToken, remoteHostname, remoteUIHostname, remoteAPIHostname, remoteBrowserAuth sql.NullString
 	var maxBackups sql.NullInt64
 	var remoteEnabled int
 
@@ -170,7 +178,7 @@ func (s *SQLiteStore) Load(ctx context.Context) (State, error) {
 		SELECT compose_project_name, default_domain, tunnel_mode, tunnel_token, 
 		       tunnel_credentials_file, tunnel_id, tunnel_name, tunnel_account_id,
 		       ui_local_port, max_backups, cloudflare_api_token,
-		       remote_enabled, remote_hostname, remote_browser_auth,
+		       remote_enabled, remote_hostname, remote_ui_hostname, remote_api_hostname, remote_browser_auth,
 		       created_at, updated_at
 		FROM settings WHERE id = 1
 	`).Scan(
@@ -187,6 +195,8 @@ func (s *SQLiteStore) Load(ctx context.Context) (State, error) {
 		&cloudflareAPIToken,
 		&remoteEnabled,
 		&remoteHostname,
+		&remoteUIHostname,
+		&remoteAPIHostname,
 		&remoteBrowserAuth,
 		&createdAt,
 		&updatedAt,
@@ -207,6 +217,8 @@ func (s *SQLiteStore) Load(ctx context.Context) (State, error) {
 	st.Settings.CloudflareAPIToken = cloudflareAPIToken.String
 	st.Settings.Remote.Enabled = remoteEnabled == 1
 	st.Settings.Remote.Hostname = remoteHostname.String
+	st.Settings.Remote.UIHostname = remoteUIHostname.String
+	st.Settings.Remote.APIHostname = remoteAPIHostname.String
 	if remoteBrowserAuth.Valid && remoteBrowserAuth.String != "" {
 		_ = json.Unmarshal([]byte(remoteBrowserAuth.String), &st.Settings.Remote.BrowserAuth)
 	}
@@ -341,9 +353,9 @@ func (s *SQLiteStore) Save(ctx context.Context, st State) error {
 		INSERT INTO settings (id, compose_project_name, default_domain, tunnel_mode, 
 		                      tunnel_token, tunnel_credentials_file, tunnel_id, tunnel_name,
 		                      tunnel_account_id, ui_local_port, max_backups, cloudflare_api_token,
-		                      remote_enabled, remote_hostname, remote_browser_auth,
+		                      remote_enabled, remote_hostname, remote_ui_hostname, remote_api_hostname, remote_browser_auth,
 		                      created_at, updated_at)
-		VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
 			compose_project_name = excluded.compose_project_name,
 			default_domain = excluded.default_domain,
@@ -358,6 +370,8 @@ func (s *SQLiteStore) Save(ctx context.Context, st State) error {
 			cloudflare_api_token = excluded.cloudflare_api_token,
 			remote_enabled = excluded.remote_enabled,
 			remote_hostname = excluded.remote_hostname,
+			remote_ui_hostname = excluded.remote_ui_hostname,
+			remote_api_hostname = excluded.remote_api_hostname,
 			remote_browser_auth = excluded.remote_browser_auth,
 			updated_at = excluded.updated_at
 	`,
@@ -374,6 +388,8 @@ func (s *SQLiteStore) Save(ctx context.Context, st State) error {
 		nullString(st.Settings.CloudflareAPIToken),
 		remoteEnabled,
 		nullString(st.Settings.Remote.Hostname),
+		nullString(st.Settings.Remote.UIHostname),
+		nullString(st.Settings.Remote.APIHostname),
 		nullString(string(remoteBrowserAuth)),
 		st.CreatedAt.Format(time.RFC3339Nano),
 		st.UpdatedAt.Format(time.RFC3339Nano),

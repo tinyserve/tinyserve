@@ -81,8 +81,15 @@ func run() error {
 		Handler: uiMux,
 	}
 
+	webhookMux := http.NewServeMux()
+	webhookMux.HandleFunc("/webhook/deploy/", handler.HandleWebhookDeploy)
+	webhookServer := &http.Server{
+		Addr:    webhookAddr(),
+		Handler: webhookMux,
+	}
+
 	// Start servers in goroutines
-	errChan := make(chan error, 2)
+	errChan := make(chan error, 3)
 	go func() {
 		log.Printf("tinyserved listening on %s (state: %s)", server.Addr, filepath.Join(dataDir, "state.db"))
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
@@ -92,6 +99,12 @@ func run() error {
 	go func() {
 		log.Printf("tinyserved ui listening on %s", uiServer.Addr)
 		if err := uiServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			errChan <- err
+		}
+	}()
+	go func() {
+		log.Printf("tinyserved webhook listening on %s", webhookServer.Addr)
+		if err := webhookServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			errChan <- err
 		}
 	}()
@@ -107,6 +120,9 @@ func run() error {
 		}
 		if err := uiServer.Shutdown(shutdownCtx); err != nil {
 			return fmt.Errorf("shutdown ui: %w", err)
+		}
+		if err := webhookServer.Shutdown(shutdownCtx); err != nil {
+			return fmt.Errorf("shutdown webhook: %w", err)
 		}
 		log.Println("shutdown complete")
 		return nil
@@ -145,4 +161,11 @@ func uiAddr() string {
 		return v
 	}
 	return "0.0.0.0:7071"
+}
+
+func webhookAddr() string {
+	if v := os.Getenv("TINYSERVE_WEBHOOK_ADDR"); v != "" {
+		return v
+	}
+	return "0.0.0.0:7072"
 }

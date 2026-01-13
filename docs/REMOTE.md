@@ -1,18 +1,18 @@
 # Remote Access
 
-Expose the tinyserve dashboard and API over the internet for remote management and CI/CD webhooks.
+Expose the tinyserve dashboard and webhook API over the internet for remote management and CI/CD.
 
 ## Overview
 
 ```
 ┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
 │  GitHub Actions │────▶│   Cloudflare    │────▶│   tinyserved    │
-│  (webhook)      │     │   Tunnel        │     │   (:7070)       │
+│  (webhook)      │     │   Tunnel        │     │   (:7072)       │
 └─────────────────┘     └─────────────────┘     └─────────────────┘
                                │
 ┌─────────────────┐            │
 │  Browser        │────────────┘
-│  (dashboard)    │
+│  (dashboard)    │              tinyserved (:7071)
 └─────────────────┘
 ```
 
@@ -23,24 +23,20 @@ Two auth mechanisms for different use cases:
 | Access Type | Who | Auth Method | Managed By |
 |-------------|-----|-------------|------------|
 | Dashboard + read API | Humans | Cloudflare Access (or alternatives) | Cloudflare / external |
-| Mutating endpoints | CI/webhooks | Bearer token | tinyserve |
+| Webhook endpoints | CI/webhooks | Bearer token | tinyserve |
 
 ### Token Auth (built-in)
 
 For CI/CD webhooks. Tokens are generated and stored by tinyserve.
 
-Protected endpoints:
-- `POST /deploy`
-- `POST /rollback`
-- `POST /services`
-- `DELETE /services/{name}`
-- `POST /init`
+Protected endpoint:
+- `POST /webhook/deploy/{service}`
 
 Usage:
 ```bash
 curl -X POST \
   -H "Authorization: Bearer <token>" \
-  https://admin.example.com/deploy
+  https://api.example.com/webhook/deploy/myapp
 ```
 
 ### Browser Auth (external)
@@ -84,8 +80,8 @@ For human access to the dashboard. Options:
 ## CLI Commands
 
 ```bash
-# Enable remote access (adds route to Cloudflare Tunnel)
-tinyserve remote enable --hostname admin.example.com
+# Enable remote access (adds routes to Cloudflare Tunnel)
+tinyserve remote enable --ui-hostname ui.example.com --api-hostname api.example.com
 
 # Disable remote access (removes route)
 tinyserve remote disable
@@ -101,17 +97,17 @@ tinyserve remote token revoke <token-id>
 ### 1. Enable remote access (with Cloudflare)
 
 ```bash
-tinyserve remote enable --hostname admin.example.com --cloudflare
+tinyserve remote enable --ui-hostname ui.example.com --api-hostname api.example.com --cloudflare
 ```
 
 This automatically:
-- Creates a DNS CNAME record (`admin.example.com → <tunnel-id>.cfargotunnel.com`) via Cloudflare API
-- Adds the hostname to cloudflared ingress config
+- Creates DNS CNAME records (`ui.example.com` and `api.example.com` → `<tunnel-id>.cfargotunnel.com`) via Cloudflare API
+- Adds both hostnames to cloudflared ingress config
 - Restarts the cloudflared container with the new config
 
 **Note:** Requires `tinyserve init` to have been run first to configure the Cloudflare tunnel.
 
-### 2. Create deploy token
+### 2. Create deploy token (for webhook)
 
 ```bash
 tinyserve remote token create --name "github-actions"
@@ -123,7 +119,7 @@ tinyserve remote token create --name "github-actions"
 
 For Cloudflare Access:
 1. Go to Cloudflare Zero Trust dashboard
-2. Create an Access Application for `admin.example.com`
+2. Create an Access Application for `ui.example.com`
 3. Add authentication policy (e.g., allow specific emails)
 
 Or use one of the alternative options above.
@@ -152,9 +148,7 @@ jobs:
         run: |
           curl -X POST \
             -H "Authorization: Bearer ${{ secrets.TINYSERVE_DEPLOY_TOKEN }}" \
-            -H "Content-Type: application/json" \
-            -d '{"service": "myapp"}' \
-            https://admin.example.com/deploy
+            https://api.example.com/webhook/deploy/myapp
 ```
 
 Add `TINYSERVE_DEPLOY_TOKEN` to your repository secrets.
@@ -164,7 +158,7 @@ Add `TINYSERVE_DEPLOY_TOKEN` to your repository secrets.
 1. **Token rotation**: Periodically revoke and recreate tokens
 2. **Least privilege**: Create separate tokens per repo/workflow
 3. **HTTPS only**: Cloudflare Tunnel enforces this by default
-4. **Rate limiting**: Consider adding rate limits to /deploy (future)
+4. **Rate limiting**: Consider adding rate limits to /webhook/deploy (future)
 5. **Audit log**: Deploy events are logged (future: structured logs)
 
 ## Troubleshooting
@@ -179,13 +173,13 @@ tinyserve remote token list
 tinyserve remote token create --name "new-token"
 ```
 
-### Cannot reach admin hostname
+### Cannot reach UI or API hostname
 
 ```bash
 # Check tunnel status
 tinyserve status
 
-# Verify cloudflared config includes the API route
+# Verify cloudflared config includes both routes
 cat ~/Library/Application\ Support/tinyserve/generated/current/cloudflared.yml
 ```
 
@@ -196,4 +190,4 @@ If using Cloudflare Access, create a bypass policy:
 2. Add policy: "Bypass" for "Service Token"
 3. Create a Cloudflare Service Token for CI
 
-Or: Don't enable Access on the admin hostname, rely only on tinyserve token auth.
+Or: Don't enable Access on the API hostname, rely only on tinyserve token auth.

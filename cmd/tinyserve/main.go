@@ -109,7 +109,7 @@ commands:
   launchd status               show launchd agent status
 
 remote:
-  remote enable --hostname H [--cloudflare] [--deploy] [--timeout SEC]
+  remote enable [--hostname H | --ui-hostname H] [--api-hostname H] [--cloudflare] [--deploy] [--timeout SEC]
                                enable remote access (--cloudflare to setup DNS/tunnel)
   remote disable               disable remote access
   remote token create [--name] create a deploy token
@@ -1104,6 +1104,8 @@ func cmdRemote(args []string) error {
 
 func cmdRemoteEnable(args []string) error {
 	var hostname string
+	var uiHostname string
+	var apiHostname string
 	var cloudflare bool
 	var deploy bool
 	var timeoutSet bool
@@ -1116,6 +1118,18 @@ func cmdRemoteEnable(args []string) error {
 				return fmt.Errorf("--hostname requires a value")
 			}
 			hostname = args[i]
+		case "--ui-hostname":
+			i++
+			if i >= len(args) {
+				return fmt.Errorf("--ui-hostname requires a value")
+			}
+			uiHostname = args[i]
+		case "--api-hostname":
+			i++
+			if i >= len(args) {
+				return fmt.Errorf("--api-hostname requires a value")
+			}
+			apiHostname = args[i]
 		case "--cloudflare":
 			cloudflare = true
 		case "--deploy":
@@ -1135,8 +1149,11 @@ func cmdRemoteEnable(args []string) error {
 			return fmt.Errorf("unknown flag: %s", args[i])
 		}
 	}
-	if hostname == "" {
-		return fmt.Errorf("--hostname is required")
+	if uiHostname == "" {
+		uiHostname = hostname
+	}
+	if uiHostname == "" && apiHostname == "" {
+		return fmt.Errorf("--ui-hostname or --api-hostname is required")
 	}
 	if deploy && !cloudflare {
 		return fmt.Errorf("--deploy requires --cloudflare")
@@ -1146,9 +1163,11 @@ func cmdRemoteEnable(args []string) error {
 	}
 
 	payload := map[string]any{
-		"enabled":    true,
-		"hostname":   hostname,
-		"cloudflare": cloudflare,
+		"enabled":      true,
+		"hostname":     uiHostname,
+		"ui_hostname":  uiHostname,
+		"api_hostname": apiHostname,
+		"cloudflare":   cloudflare,
 	}
 	body, _ := json.Marshal(payload)
 	req, err := http.NewRequest(http.MethodPost, apiBase()+"/remote/enable", bytes.NewReader(body))
@@ -1165,7 +1184,12 @@ func cmdRemoteEnable(args []string) error {
 		data, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("enable remote failed: %s (%s)", resp.Status, strings.TrimSpace(string(data)))
 	}
-	fmt.Printf("✓ Remote access enabled at %s\n", hostname)
+	if uiHostname != "" {
+		fmt.Printf("✓ Remote UI enabled at %s\n", uiHostname)
+	}
+	if apiHostname != "" {
+		fmt.Printf("✓ Remote API enabled at %s\n", apiHostname)
+	}
 	if cloudflare {
 		fmt.Println("  Cloudflare DNS configured")
 		if deploy {

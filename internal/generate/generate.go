@@ -142,10 +142,14 @@ func writeCloudflared(path string, s state.State, hostnames []string) error {
 		}
 	}
 	sb.WriteString("ingress:\n")
+	uiHost := remoteUIHostname(s)
+	apiHost := remoteAPIHostname(s)
 	for _, h := range hostnames {
 		service := "http://traefik:80"
-		if s.Settings.Remote.Enabled && s.Settings.Remote.Hostname != "" && h == s.Settings.Remote.Hostname {
+		if uiHost != "" && strings.EqualFold(h, uiHost) {
 			service = fmt.Sprintf("http://host.docker.internal:%s", uiProxyPort())
+		} else if apiHost != "" && strings.EqualFold(h, apiHost) {
+			service = fmt.Sprintf("http://host.docker.internal:%s", webhookProxyPort())
 		}
 		sb.WriteString(fmt.Sprintf("  - hostname: %s\n    service: %s\n", h, service))
 	}
@@ -280,6 +284,29 @@ func uiProxyPort() string {
 	return port
 }
 
+func webhookProxyPort() string {
+	addr := os.Getenv("TINYSERVE_WEBHOOK_ADDR")
+	if addr == "" {
+		return "7072"
+	}
+	_, port, err := net.SplitHostPort(addr)
+	if err != nil || port == "" {
+		return "7072"
+	}
+	return port
+}
+
+func remoteUIHostname(s state.State) string {
+	if s.Settings.Remote.UIHostname != "" {
+		return s.Settings.Remote.UIHostname
+	}
+	return s.Settings.Remote.Hostname
+}
+
+func remoteAPIHostname(s state.State) string {
+	return s.Settings.Remote.APIHostname
+}
+
 func collectHostnames(s state.State) []string {
 	domain := s.Settings.DefaultDomain
 	if domain == "" {
@@ -299,6 +326,14 @@ func collectHostnames(s state.State) []string {
 	}
 	if s.Settings.Remote.Enabled && s.Settings.Remote.Hostname != "" {
 		hosts = append(hosts, s.Settings.Remote.Hostname)
+	}
+	if s.Settings.Remote.Enabled {
+		if ui := remoteUIHostname(s); ui != "" {
+			hosts = append(hosts, ui)
+		}
+		if api := remoteAPIHostname(s); api != "" {
+			hosts = append(hosts, api)
+		}
 	}
 	return unique(hosts)
 }
