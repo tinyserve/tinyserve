@@ -167,7 +167,11 @@ func (r *Runner) run(ctx context.Context, args ...string) (string, error) {
 
 	err := cmd.Run()
 	if err != nil {
-		return out.String(), fmt.Errorf("docker %s: %w", strings.Join(args, " "), err)
+		output := strings.TrimSpace(out.String())
+		if output != "" {
+			return output, fmt.Errorf("docker %s: %w\n%s", strings.Join(args, " "), err, output)
+		}
+		return output, fmt.Errorf("docker %s: %w", strings.Join(args, " "), err)
 	}
 	return out.String(), nil
 }

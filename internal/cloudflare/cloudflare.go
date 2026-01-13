@@ -253,7 +253,23 @@ func (c *Client) ListDNSRecords(ctx context.Context, zoneID, recordType, name st
 
 // EnsureCNAME ensures a CNAME record exists with the correct target.
 // Creates the record if it doesn't exist, updates it if the content differs.
+// Deletes any conflicting A/AAAA records first.
 func (c *Client) EnsureCNAME(ctx context.Context, zoneID, name, target string, proxied bool) error {
+	// First, delete any conflicting A or AAAA records
+	for _, recordType := range []string{"A", "AAAA"} {
+		conflicting, err := c.ListDNSRecords(ctx, zoneID, recordType, name)
+		if err != nil {
+			return fmt.Errorf("list %s records: %w", recordType, err)
+		}
+		fmt.Printf("DEBUG EnsureCNAME: found %d %s records for %q\n", len(conflicting), recordType, name)
+		for _, rec := range conflicting {
+			fmt.Printf("DEBUG EnsureCNAME: deleting %s record %s (%s)\n", recordType, rec.ID, rec.Content)
+			if err := c.DeleteDNSRecord(ctx, zoneID, rec.ID); err != nil {
+				return fmt.Errorf("delete conflicting %s record: %w", recordType, err)
+			}
+		}
+	}
+
 	records, err := c.ListDNSRecords(ctx, zoneID, "CNAME", name)
 	if err != nil {
 		return err
@@ -287,6 +303,19 @@ func (c *Client) EnsureCNAME(ctx context.Context, zoneID, name, target string, p
 	var resp apiResponse[DNSRecord]
 	path := fmt.Sprintf("/zones/%s/dns_records/%s", zoneID, existing.ID)
 	if err := c.doRequest(ctx, "PUT", path, record, &resp); err != nil {
+		return err
+	}
+	if !resp.Success {
+		return fmt.Errorf("cloudflare: %v", resp.Errors)
+	}
+	return nil
+}
+
+// DeleteDNSRecord deletes a DNS record by ID.
+func (c *Client) DeleteDNSRecord(ctx context.Context, zoneID, recordID string) error {
+	var resp apiResponse[struct{}]
+	path := fmt.Sprintf("/zones/%s/dns_records/%s", zoneID, recordID)
+	if err := c.doRequest(ctx, "DELETE", path, nil, &resp); err != nil {
 		return err
 	}
 	if !resp.Success {
