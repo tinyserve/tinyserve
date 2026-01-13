@@ -55,6 +55,7 @@ func run() error {
 	if err := store.Save(ctx, initialState); err != nil {
 		return fmt.Errorf("init state: %w", err)
 	}
+	logRemoteHosts(initialState)
 
 	generatedRoot := filepath.Join(dataDir, "generated")
 	backupsDir := filepath.Join(dataDir, "backups")
@@ -62,30 +63,32 @@ func run() error {
 
 	browserAuth := api.NewBrowserAuthMiddleware(store)
 	handler := api.NewHandler(store, generatedRoot, backupsDir, filepath.Join(dataDir, "state.db"), cloudflaredDir)
+	handler.AccessLogs = api.NewAccessLogs(1000)
 	mux := http.NewServeMux()
 	handler.RegisterRoutes(mux, browserAuth)
 	mux.Handle("/", browserAuth.Wrap(webui.Handler()))
 
 	server := &http.Server{
 		Addr:    "127.0.0.1:7070",
-		Handler: mux,
+		Handler: withAccessLogs("api", handler.AccessLogs.API, mux),
 	}
 
 	uiMux := http.NewServeMux()
 	uiMux.Handle("/status", browserAuth.Wrap(http.HandlerFunc(handler.HandleStatus)))
 	uiMux.Handle("/services", browserAuth.Wrap(http.HandlerFunc(handler.HandleServicesReadOnly)))
 	uiMux.Handle("/me", browserAuth.Wrap(http.HandlerFunc(handler.HandleMe)))
+	uiMux.Handle("/logs", browserAuth.Wrap(http.HandlerFunc(handler.HandleLogsReadOnly)))
 	uiMux.Handle("/", browserAuth.Wrap(webui.Handler()))
 	uiServer := &http.Server{
 		Addr:    uiAddr(),
-		Handler: uiMux,
+		Handler: withAccessLogs("ui", handler.AccessLogs.UI, uiMux),
 	}
 
 	webhookMux := http.NewServeMux()
 	webhookMux.HandleFunc("/webhook/deploy/", handler.HandleWebhookDeploy)
 	webhookServer := &http.Server{
 		Addr:    webhookAddr(),
-		Handler: webhookMux,
+		Handler: withAccessLogs("webhook", handler.AccessLogs.Webhook, webhookMux),
 	}
 
 	// Start servers in goroutines
@@ -154,6 +157,20 @@ func ensureDataDir() (string, error) {
 	}
 
 	return dataDir, nil
+}
+
+func logRemoteHosts(st state.State) {
+	if !st.Settings.Remote.Enabled {
+		return
+	}
+	if st.Settings.Remote.UIHostname != "" {
+		log.Printf("remote ui hostname: %s", st.Settings.Remote.UIHostname)
+	} else if st.Settings.Remote.Hostname != "" {
+		log.Printf("remote ui hostname: %s", st.Settings.Remote.Hostname)
+	}
+	if st.Settings.Remote.APIHostname != "" {
+		log.Printf("remote api hostname: %s", st.Settings.Remote.APIHostname)
+	}
 }
 
 func uiAddr() string {

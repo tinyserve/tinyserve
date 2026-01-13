@@ -31,6 +31,7 @@ type Handler struct {
 	BackupsDir     string
 	StatePath      string
 	CloudflaredDir string
+	AccessLogs     *AccessLogs
 }
 
 func NewHandler(store state.Store, generatedRoot, backupsDir, statePath, cloudflaredDir string) *Handler {
@@ -173,6 +174,10 @@ func (h *Handler) HandleServicesReadOnly(w http.ResponseWriter, r *http.Request)
 
 func (h *Handler) HandleMe(w http.ResponseWriter, r *http.Request) {
 	h.handleMe(w, r)
+}
+
+func (h *Handler) HandleLogsReadOnly(w http.ResponseWriter, r *http.Request) {
+	h.handleLogs(w, r)
 }
 
 func (h *Handler) HandleWebhookDeploy(w http.ResponseWriter, r *http.Request) {
@@ -616,6 +621,20 @@ func (h *Handler) handleLogs(w http.ResponseWriter, r *http.Request) {
 	}
 
 	follow := r.URL.Query().Get("follow") == "1"
+	if h.AccessLogs != nil {
+		if buf := h.AccessLogs.Get(service); buf != nil {
+			if follow {
+				http.Error(w, "follow not supported for access logs", http.StatusBadRequest)
+				return
+			}
+			lines := buf.Lines(tail)
+			w.Header().Set("Content-Type", "text/plain")
+			if len(lines) > 0 {
+				_, _ = w.Write([]byte(strings.Join(lines, "\n") + "\n"))
+			}
+			return
+		}
+	}
 	runner := docker.NewRunner(h.currentDir())
 
 	if follow {
