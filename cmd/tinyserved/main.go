@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -185,4 +186,63 @@ func webhookAddr() string {
 		return v
 	}
 	return "0.0.0.0:7072"
+}
+
+type statusRecorder struct {
+	http.ResponseWriter
+	status int
+	bytes  int
+}
+
+func (r *statusRecorder) WriteHeader(code int) {
+	r.status = code
+	r.ResponseWriter.WriteHeader(code)
+}
+
+func (r *statusRecorder) Write(p []byte) (int, error) {
+	if r.status == 0 {
+		r.status = http.StatusOK
+	}
+	n, err := r.ResponseWriter.Write(p)
+	r.bytes += n
+	return n, err
+}
+
+func withAccessLogs(kind string, buf *api.LogBuffer, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+		rec := &statusRecorder{ResponseWriter: w}
+		next.ServeHTTP(rec, r)
+
+		if buf == nil {
+			return
+		}
+		status := rec.status
+		if status == 0 {
+			status = http.StatusOK
+		}
+		line := fmt.Sprintf(
+			"%s %s %s %s %d %dB %s %s",
+			time.Now().UTC().Format(time.RFC3339),
+			kind,
+			r.Method,
+			r.URL.RequestURI(),
+			status,
+			rec.bytes,
+			time.Since(start).Truncate(time.Millisecond),
+			clientIP(r),
+		)
+		buf.Add(line)
+	})
+}
+
+func clientIP(r *http.Request) string {
+	if v := r.Header.Get("CF-Connecting-IP"); v != "" {
+		return v
+	}
+	if v := r.Header.Get("X-Forwarded-For"); v != "" {
+		parts := strings.Split(v, ",")
+		return strings.TrimSpace(parts[0])
+	}
+	return r.RemoteAddr
 }

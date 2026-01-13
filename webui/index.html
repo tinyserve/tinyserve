@@ -168,6 +168,33 @@
       color: #fecdd3;
       display: none;
     }
+    .log-controls {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      align-items: center;
+      margin-bottom: 10px;
+    }
+    select,
+    input[type="number"] {
+      background: rgba(17,24,39,0.8);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 8px 10px;
+    }
+    .logs-output {
+      background: rgba(2,6,23,0.8);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 12px;
+      min-height: 120px;
+      max-height: 320px;
+      overflow: auto;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+      font-size: 12px;
+      white-space: pre-wrap;
+    }
   </style>
 </head>
 <body>
@@ -217,6 +244,17 @@
       <div id="services" class="services"></div>
       <div class="error" id="services-error"></div>
     </div>
+
+    <div class="section">
+      <h2>Logs</h2>
+      <div class="log-controls">
+        <select id="logs-service"></select>
+        <input id="logs-tail" type="number" min="10" max="2000" value="200" />
+        <button id="logs-refresh">Load logs</button>
+      </div>
+      <pre id="logs-output" class="logs-output">Select a source and load logs.</pre>
+      <div class="error" id="logs-error"></div>
+    </div>
   </div>
 
   <script>
@@ -230,6 +268,10 @@
     const proxyHealth = document.getElementById("proxy-health");
     const tunnelStatus = document.getElementById("tunnel-status");
     const tunnelHealth = document.getElementById("tunnel-health");
+    const logsService = document.getElementById("logs-service");
+    const logsTail = document.getElementById("logs-tail");
+    const logsOutput = document.getElementById("logs-output");
+    const logsError = document.getElementById("logs-error");
 
     async function fetchJSON(path) {
       const res = await fetch(path, { cache: "no-store" });
@@ -336,6 +378,62 @@
       }
     }
 
+    function renderLogOptions(services) {
+      const current = logsService.value;
+      logsService.innerHTML = "";
+      const builtins = [
+        { value: "ui", label: "UI access" },
+        { value: "api", label: "API access" },
+        { value: "webhook", label: "Webhook access" },
+        { value: "traefik", label: "traefik (container)" },
+        { value: "cloudflared", label: "cloudflared (container)" },
+        { value: "whoami", label: "whoami (container)" },
+      ];
+      for (const entry of builtins) {
+        const opt = document.createElement("option");
+        opt.value = entry.value;
+        opt.textContent = entry.label;
+        logsService.appendChild(opt);
+      }
+      for (const svc of services || []) {
+        const opt = document.createElement("option");
+        opt.value = svc.name || "";
+        opt.textContent = `${svc.name || "unnamed"} (service)`;
+        logsService.appendChild(opt);
+      }
+      if (current) {
+        logsService.value = current;
+      } else {
+        logsService.value = "ui";
+      }
+    }
+
+    async function loadLogs() {
+      logsError.style.display = "none";
+      const service = logsService.value;
+      if (!service) {
+        logsOutput.textContent = "Select a log source.";
+        return;
+      }
+      const tail = parseInt(logsTail.value || "200", 10);
+      const params = new URLSearchParams();
+      params.set("service", service);
+      if (!Number.isNaN(tail)) {
+        params.set("tail", String(tail));
+      }
+      try {
+        const res = await fetch(`/logs?${params.toString()}`, { cache: "no-store" });
+        if (!res.ok) {
+          const text = await res.text();
+          throw new Error(text || res.statusText);
+        }
+        logsOutput.textContent = await res.text();
+      } catch (err) {
+        logsError.textContent = `Logs error: ${err.message}`;
+        logsError.style.display = "block";
+      }
+    }
+
     async function loadDashboard() {
       statusError.style.display = "none";
       servicesError.style.display = "none";
@@ -350,6 +448,7 @@
       try {
         const services = await fetchJSON("/services");
         renderServices(services);
+        renderLogOptions(services);
       } catch (err) {
         servicesError.textContent = `Services error: ${err.message}`;
         servicesError.style.display = "block";
@@ -357,6 +456,7 @@
     }
 
     document.getElementById("refresh").addEventListener("click", loadDashboard);
+    document.getElementById("logs-refresh").addEventListener("click", loadLogs);
     document.addEventListener("DOMContentLoaded", loadDashboard);
 
     function isHealthy(entry) {
