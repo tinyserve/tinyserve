@@ -289,9 +289,36 @@ func (h *Handler) handleAddService(w http.ResponseWriter, r *http.Request) {
 		svc.Enabled = true
 	}
 
-	if svc.Name == "" || svc.Image == "" || svc.InternalPort == 0 {
-		http.Error(w, "name, image, and internal_port are required", http.StatusBadRequest)
+	if svc.Image == "" {
+		http.Error(w, "image is required", http.StatusBadRequest)
 		return
+	}
+
+	// Derive name from image if not specified
+	if svc.Name == "" {
+		svc.Name = nameFromImage(svc.Image)
+	}
+
+	// Auto-detect port from image if not specified
+	if svc.InternalPort == 0 {
+		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Minute)
+		defer cancel()
+
+		// Pull image first to ensure it's available locally
+		if err := docker.PullImage(ctx, svc.Image); err != nil {
+			http.Error(w, fmt.Sprintf("failed to pull image for port detection: %v", err), http.StatusBadRequest)
+			return
+		}
+
+		port, err := docker.InspectImagePort(ctx, svc.Image)
+		if err != nil {
+			http.Error(w, fmt.Sprintf("failed to detect port from image: %v", err), http.StatusBadRequest)
+			return
+		}
+		if port == 0 {
+			port = 80 // Default to 80 if no EXPOSE directive found
+		}
+		svc.InternalPort = port
 	}
 
 	// Validate service name
@@ -1094,6 +1121,29 @@ func sanitizeName(name string) string {
 	name = strings.ToLower(strings.TrimSpace(name))
 	name = strings.ReplaceAll(name, " ", "-")
 	return name
+}
+
+// nameFromImage extracts a service name from a Docker image reference.
+// Examples: "nginx" -> "nginx", "nginx:latest" -> "nginx",
+// "ghcr.io/org/myapp:v1.2" -> "myapp", "registry.com/path/image" -> "image"
+func nameFromImage(image string) string {
+	// Remove tag or digest
+	if idx := strings.LastIndex(image, ":"); idx != -1 {
+		// Check it's not part of a port (e.g., registry:5000/image)
+		if !strings.Contains(image[idx:], "/") {
+			image = image[:idx]
+		}
+	}
+	if idx := strings.LastIndex(image, "@"); idx != -1 {
+		image = image[:idx]
+	}
+
+	// Take the last path component (image name)
+	if idx := strings.LastIndex(image, "/"); idx != -1 {
+		image = image[idx+1:]
+	}
+
+	return sanitizeName(image)
 }
 
 func parseWebhookService(path string) (string, error) {

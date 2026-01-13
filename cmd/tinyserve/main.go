@@ -97,7 +97,7 @@ commands:
   checklist                    check system requirements and status
   init                           interactive setup wizard
        [--cloudflare-api-token T] [--default-domain D] [--tunnel-name N] [--account-id ID] [--skip-cloudflare]
-  service add --name --image --port [--hostname h] [--env K=V] [--env-file .env]
+  service add --image [--name N] [--port P] [--hostname h] [--env K=V] [--env-file .env]
                [--mem MB] [--volume host:container] [--healthcheck "CMD ..."]
   service list                 list all services
   service remove --name NAME   remove a service
@@ -513,8 +513,8 @@ func parseServiceAdd(args []string) (addOptions, error) {
 			return opts, fmt.Errorf("unknown flag: %s", args[i])
 		}
 	}
-	if opts.Name == "" || opts.Image == "" || opts.Port == 0 {
-		return opts, fmt.Errorf("--name, --image, and --port are required")
+	if opts.Image == "" {
+		return opts, fmt.Errorf("--image is required")
 	}
 	return opts, nil
 }

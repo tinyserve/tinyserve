@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os/exec"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -169,4 +170,52 @@ func (r *Runner) run(ctx context.Context, args ...string) (string, error) {
 		return out.String(), fmt.Errorf("docker %s: %w", strings.Join(args, " "), err)
 	}
 	return out.String(), nil
+}
+
+// InspectImagePort inspects a Docker image and returns the first exposed port.
+// Returns 0 if no ports are exposed. The image must be available locally.
+func InspectImagePort(ctx context.Context, image string) (int, error) {
+	cmd := exec.CommandContext(ctx, "docker", "image", "inspect", image, "--format", "{{json .Config.ExposedPorts}}")
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = &out
+
+	if err := cmd.Run(); err != nil {
+		return 0, fmt.Errorf("inspect image %s: %w", image, err)
+	}
+
+	output := strings.TrimSpace(out.String())
+	if output == "" || output == "null" || output == "{}" {
+		return 0, nil
+	}
+
+	var ports map[string]interface{}
+	if err := json.Unmarshal([]byte(output), &ports); err != nil {
+		return 0, fmt.Errorf("parse exposed ports: %w", err)
+	}
+
+	for portSpec := range ports {
+		parts := strings.Split(portSpec, "/")
+		if len(parts) >= 1 {
+			port, err := strconv.Atoi(parts[0])
+			if err == nil && port > 0 {
+				return port, nil
+			}
+		}
+	}
+
+	return 0, nil
+}
+
+// PullImage pulls a Docker image.
+func PullImage(ctx context.Context, image string) error {
+	cmd := exec.CommandContext(ctx, "docker", "pull", image)
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = &out
+
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("pull image %s: %w\n%s", image, err, out.String())
+	}
+	return nil
 }
