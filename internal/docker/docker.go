@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -14,11 +15,35 @@ import (
 )
 
 type Runner struct {
-	Workdir string
+	Workdir          string
+	useLegacyCompose bool
+}
+
+// detectLegacyCompose checks if "docker compose" works, otherwise uses "docker-compose" binary
+func detectLegacyCompose() bool {
+	cmd := exec.Command("docker", "compose", "version")
+	if err := cmd.Run(); err != nil {
+		// docker compose subcommand not available, check for docker-compose binary
+		if _, err := exec.LookPath("docker-compose"); err == nil {
+			log.Printf("docker: using legacy docker-compose binary")
+			return true
+		}
+	}
+	return false
+}
+
+var useLegacyCompose = detectLegacyCompose()
+
+// ComposeCommand returns the compose command being used (for diagnostics)
+func ComposeCommand() string {
+	if useLegacyCompose {
+		return "docker-compose"
+	}
+	return "docker compose"
 }
 
 func NewRunner(workdir string) *Runner {
-	return &Runner{Workdir: workdir}
+	return &Runner{Workdir: workdir, useLegacyCompose: useLegacyCompose}
 }
 
 func (r *Runner) Up(ctx context.Context, extraArgs ...string) (string, error) {
@@ -140,13 +165,18 @@ func (r *Runner) Logs(ctx context.Context, service string, tail int) (string, er
 
 // LogsFollow streams logs to the provided writer until context is cancelled.
 func (r *Runner) LogsFollow(ctx context.Context, service string, tail int, w io.Writer) error {
-	args := []string{"compose", "logs", "-f", "--no-log-prefix"}
+	composeArgs := []string{"logs", "-f", "--no-log-prefix"}
 	if tail > 0 {
-		args = append(args, "--tail", fmt.Sprintf("%d", tail))
+		composeArgs = append(composeArgs, "--tail", fmt.Sprintf("%d", tail))
 	}
-	args = append(args, service)
+	composeArgs = append(composeArgs, service)
 
-	cmd := exec.CommandContext(ctx, "docker", args...)
+	var cmd *exec.Cmd
+	if r.useLegacyCompose {
+		cmd = exec.CommandContext(ctx, "docker-compose", composeArgs...)
+	} else {
+		cmd = exec.CommandContext(ctx, "docker", append([]string{"compose"}, composeArgs...)...)
+	}
 	cmd.Dir = r.Workdir
 	cmd.Stdout = w
 	cmd.Stderr = w
@@ -159,7 +189,18 @@ func (r *Runner) LogsFollow(ctx context.Context, service string, tail int, w io.
 }
 
 func (r *Runner) run(ctx context.Context, args ...string) (string, error) {
-	cmd := exec.CommandContext(ctx, "docker", args...)
+	var cmd *exec.Cmd
+	var cmdDesc string
+
+	// Use docker-compose binary if docker compose subcommand isn't available
+	if len(args) > 0 && args[0] == "compose" && r.useLegacyCompose {
+		cmd = exec.CommandContext(ctx, "docker-compose", args[1:]...)
+		cmdDesc = "docker-compose " + strings.Join(args[1:], " ")
+	} else {
+		cmd = exec.CommandContext(ctx, "docker", args...)
+		cmdDesc = "docker " + strings.Join(args, " ")
+	}
+
 	cmd.Dir = r.Workdir
 	var out bytes.Buffer
 	cmd.Stdout = &out
@@ -169,9 +210,9 @@ func (r *Runner) run(ctx context.Context, args ...string) (string, error) {
 	if err != nil {
 		output := strings.TrimSpace(out.String())
 		if output != "" {
-			return output, fmt.Errorf("docker %s: %w\n%s", strings.Join(args, " "), err, output)
+			return output, fmt.Errorf("%s: %w\n%s", cmdDesc, err, output)
 		}
-		return output, fmt.Errorf("docker %s: %w", strings.Join(args, " "), err)
+		return output, fmt.Errorf("%s: %w", cmdDesc, err)
 	}
 	return out.String(), nil
 }

@@ -559,6 +559,7 @@ func (h *Handler) handleDeploy(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("deploy: docker pull start")
 	if _, err := runner.Pull(ctx, targets...); err != nil && !strings.Contains(err.Error(), "No such service") {
+		log.Printf("deploy: docker pull failed: %v", err)
 		http.Error(w, fmt.Sprintf("docker pull: %v", err), http.StatusInternalServerError)
 		return
 	}
@@ -991,9 +992,12 @@ func (h *Handler) applyConfig(ctx context.Context, st state.State, targets []str
 
 	runner := docker.NewRunner(out.StagingDir)
 
+	log.Printf("applyConfig: docker pull start for %v", targets)
 	if _, err := runner.Pull(ctx, targets...); err != nil && !strings.Contains(err.Error(), "No such service") {
+		log.Printf("applyConfig: docker pull failed: %v", err)
 		return fmt.Errorf("docker pull: %w", err)
 	}
+	log.Printf("applyConfig: docker pull complete")
 
 	ts := time.Now().UTC().Format("20060102-150405")
 	if err := h.backupState(ts); err != nil {

@@ -53,13 +53,9 @@ ifconfig | grep "inet "
 Pick one:
 - **Colima (recommended)**: `brew install colima docker` then `colima start --arch aarch64 --vm-type vz --cpu 4 --memory 8`
   - Verify daemon: `docker info`
-  - Optional x86 images: add `--arch x86_64` when starting Colima (Rosetta required).
+  - Docker & Docker compose plugin `brew install docker && brew install docker-compose`
 - **Rancher Desktop** with Docker API enabled (if you prefer a GUI).
 - (Advanced) **Lima** with Docker socket/nerdctl; ensure `docker` CLI points at the Lima socket.
-
-Notes:
-- macOS cannot run the upstream Docker Engine natively; you need a VM-backed runtime like Colima/Rancher.
-- Keep `docker` CLI installed (`brew install docker`) even when using Colima/Rancher; it talks to the socket they expose.
 
 ### Ensuring Docker daemon is running
 
