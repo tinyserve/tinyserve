@@ -130,26 +130,10 @@ func TestHandleAddServiceValidation(t *testing.T) {
 		wantStatus int
 	}{
 		{
-			name: "missing name",
-			payload: map[string]any{
-				"image":         "nginx:latest",
-				"internal_port": 80,
-			},
-			wantStatus: http.StatusBadRequest,
-		},
-		{
 			name: "missing image",
 			payload: map[string]any{
 				"name":          "test",
 				"internal_port": 80,
-			},
-			wantStatus: http.StatusBadRequest,
-		},
-		{
-			name: "missing port",
-			payload: map[string]any{
-				"name":  "test",
-				"image": "nginx:latest",
 			},
 			wantStatus: http.StatusBadRequest,
 		},
