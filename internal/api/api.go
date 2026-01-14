@@ -200,8 +200,14 @@ func (h *Handler) HandleWebhookDeploy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if _, status, msg := h.requireWebhookToken(r); status != 0 {
+	matchedToken, status, msg := h.requireWebhookToken(r)
+	if status != 0 {
 		http.Error(w, msg, status)
+		return
+	}
+
+	if !isTokenAllowedForService(matchedToken, serviceName) {
+		http.Error(w, "token not authorized for this service", http.StatusForbidden)
 		return
 	}
 
@@ -1259,6 +1265,21 @@ func (h *Handler) requireWebhookToken(r *http.Request) (*state.APIToken, int, st
 	return matchedToken, 0, ""
 }
 
+func isTokenAllowedForService(token *state.APIToken, serviceName string) bool {
+	if token == nil {
+		return false
+	}
+	if len(token.Services) == 0 {
+		return true // No restrictions - token can deploy any service
+	}
+	for _, s := range token.Services {
+		if strings.EqualFold(s, serviceName) {
+			return true
+		}
+	}
+	return false
+}
+
 func copyFile(src, dst string) error {
 	in, err := os.Open(src)
 	if err != nil {
@@ -1352,12 +1373,14 @@ func (h *Handler) handleHealth(w http.ResponseWriter, r *http.Request) {
 }
 
 type createTokenRequest struct {
-	Name string `json:"name"`
+	Name     string   `json:"name"`
+	Services []string `json:"services,omitempty"` // If empty, token can deploy any service
 }
 
 type tokenResponse struct {
 	ID        string     `json:"id"`
 	Name      string     `json:"name"`
+	Services  []string   `json:"services,omitempty"`
 	CreatedAt time.Time  `json:"created_at"`
 	LastUsed  *time.Time `json:"last_used,omitempty"`
 }
@@ -1386,6 +1409,7 @@ func (h *Handler) handleListTokens(w http.ResponseWriter, r *http.Request) {
 		tokens = append(tokens, tokenResponse{
 			ID:        t.ID,
 			Name:      t.Name,
+			Services:  t.Services,
 			CreatedAt: t.CreatedAt,
 			LastUsed:  t.LastUsed,
 		})
@@ -1420,6 +1444,7 @@ func (h *Handler) handleCreateToken(w http.ResponseWriter, r *http.Request) {
 		ID:        auth.GenerateTokenID(),
 		Name:      req.Name,
 		Hash:      hash,
+		Services:  req.Services,
 		CreatedAt: time.Now().UTC(),
 	}
 
@@ -1436,13 +1461,17 @@ func (h *Handler) handleCreateToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, map[string]any{
+	resp := map[string]any{
 		"id":         token.ID,
 		"name":       token.Name,
 		"token":      plaintext,
 		"created_at": token.CreatedAt,
 		"message":    "Store this token securely - it won't be shown again",
-	})
+	}
+	if len(token.Services) > 0 {
+		resp["services"] = token.Services
+	}
+	writeJSON(w, resp)
 }
 
 func (h *Handler) handleTokenByID(w http.ResponseWriter, r *http.Request) {

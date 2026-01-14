@@ -113,7 +113,8 @@ remote:
   remote enable [--hostname H | --ui-hostname H] [--api-hostname H] [--cloudflare] [--deploy] [--timeout SEC]
                                enable remote access (--cloudflare to setup DNS/tunnel)
   remote disable               disable remote access
-  remote token create [--name] create a deploy token
+  remote token create [--name] [--service S]...
+                               create a deploy token (--service restricts to specific services)
   remote token list            list all tokens
   remote token revoke <id>     revoke a token
   remote auth cloudflare-access --team-domain <domain> --policy-aud <aud>
@@ -1327,6 +1328,7 @@ func cmdRemoteToken(args []string) error {
 
 func cmdRemoteTokenCreate(args []string) error {
 	var name string
+	var services []string
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
 		case "--name":
@@ -1335,6 +1337,12 @@ func cmdRemoteTokenCreate(args []string) error {
 				return fmt.Errorf("--name requires a value")
 			}
 			name = args[i]
+		case "--service":
+			i++
+			if i >= len(args) {
+				return fmt.Errorf("--service requires a value")
+			}
+			services = append(services, args[i])
 		default:
 			return fmt.Errorf("unknown flag: %s", args[i])
 		}
@@ -1343,6 +1351,9 @@ func cmdRemoteTokenCreate(args []string) error {
 	payload := map[string]any{}
 	if name != "" {
 		payload["name"] = name
+	}
+	if len(services) > 0 {
+		payload["services"] = services
 	}
 	body, _ := json.Marshal(payload)
 	req, err := http.NewRequest(http.MethodPost, apiBase()+"/tokens", bytes.NewReader(body))
@@ -1370,6 +1381,17 @@ func cmdRemoteTokenCreate(args []string) error {
 	if n, ok := result["name"].(string); ok && n != "" {
 		fmt.Printf("Name: %s\n", n)
 	}
+	if svcs, ok := result["services"].([]any); ok && len(svcs) > 0 {
+		var names []string
+		for _, s := range svcs {
+			if name, ok := s.(string); ok {
+				names = append(names, name)
+			}
+		}
+		fmt.Printf("Services: %s\n", strings.Join(names, ", "))
+	} else {
+		fmt.Println("Services: all (unrestricted)")
+	}
 	fmt.Println("\n⚠️  Store this token securely - it won't be shown again")
 	return nil
 }
@@ -1395,8 +1417,8 @@ func cmdRemoteTokenList() error {
 		return nil
 	}
 
-	fmt.Printf("%-18s %-20s %-24s %-24s\n", "ID", "NAME", "CREATED", "LAST USED")
-	fmt.Println(strings.Repeat("-", 90))
+	fmt.Printf("%-18s %-20s %-20s %-24s %-24s\n", "ID", "NAME", "SERVICES", "CREATED", "LAST USED")
+	fmt.Println(strings.Repeat("-", 110))
 	for _, t := range tokens {
 		id, _ := t["id"].(string)
 		name, _ := t["name"].(string)
@@ -1405,7 +1427,20 @@ func cmdRemoteTokenList() error {
 		if lastUsed == "" {
 			lastUsed = "never"
 		}
-		fmt.Printf("%-18s %-20s %-24s %-24s\n", id, name, formatTime(createdAt), formatTime(lastUsed))
+		services := "all"
+		if svcs, ok := t["services"].([]any); ok && len(svcs) > 0 {
+			var names []string
+			for _, s := range svcs {
+				if sn, ok := s.(string); ok {
+					names = append(names, sn)
+				}
+			}
+			services = strings.Join(names, ",")
+			if len(services) > 18 {
+				services = services[:15] + "..."
+			}
+		}
+		fmt.Printf("%-18s %-20s %-20s %-24s %-24s\n", id, name, services, formatTime(createdAt), formatTime(lastUsed))
 	}
 	return nil
 }

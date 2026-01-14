@@ -81,6 +81,7 @@ type APIToken struct {
 	ID        string     `json:"id"`
 	Name      string     `json:"name"`
 	Hash      string     `json:"hash"`
+	Services  []string   `json:"services,omitempty"` // If empty, token can deploy any service
 	CreatedAt time.Time  `json:"created_at"`
 	LastUsed  *time.Time `json:"last_used,omitempty"`
 }
