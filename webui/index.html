@@ -195,6 +195,26 @@
       font-size: 12px;
       white-space: pre-wrap;
     }
+    .tail-buttons {
+      display: flex;
+      gap: 4px;
+    }
+    .tail-btn {
+      background: rgba(17,24,39,0.8);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 6px 12px;
+      cursor: pointer;
+      font-size: 13px;
+    }
+    .tail-btn.active {
+      background: rgba(99, 102, 241, 0.3);
+      border-color: rgba(99, 102, 241, 0.6);
+    }
+    .tail-btn:hover {
+      background: rgba(99, 102, 241, 0.2);
+    }
   </style>
 </head>
 <body>
@@ -249,8 +269,12 @@
       <h2>Logs</h2>
       <div class="log-controls">
         <select id="logs-service"></select>
-        <input id="logs-tail" type="number" min="10" max="2000" value="200" />
-        <button id="logs-refresh">Load logs</button>
+        <div class="tail-buttons">
+          <button class="tail-btn" data-tail="50">50</button>
+          <button class="tail-btn active" data-tail="200">200</button>
+          <button class="tail-btn" data-tail="500">500</button>
+          <button class="tail-btn" data-tail="1000">1000</button>
+        </div>
       </div>
       <pre id="logs-output" class="logs-output">Select a source and load logs.</pre>
       <div class="error" id="logs-error"></div>
@@ -269,9 +293,10 @@
     const tunnelStatus = document.getElementById("tunnel-status");
     const tunnelHealth = document.getElementById("tunnel-health");
     const logsService = document.getElementById("logs-service");
-    const logsTail = document.getElementById("logs-tail");
     const logsOutput = document.getElementById("logs-output");
     const logsError = document.getElementById("logs-error");
+    const tailButtons = document.querySelectorAll(".tail-btn");
+    let currentTail = 200;
 
     async function fetchJSON(path) {
       const res = await fetch(path, { cache: "no-store" });
@@ -415,22 +440,21 @@
         logsOutput.textContent = "Select a log source.";
         return;
       }
-      const tail = parseInt(logsTail.value || "200", 10);
+      logsOutput.textContent = "Loading...";
       const params = new URLSearchParams();
       params.set("service", service);
-      if (!Number.isNaN(tail)) {
-        params.set("tail", String(tail));
-      }
+      params.set("tail", String(currentTail));
       try {
         const res = await fetch(`/logs?${params.toString()}`, { cache: "no-store" });
         if (!res.ok) {
           const text = await res.text();
           throw new Error(text || res.statusText);
         }
-        logsOutput.textContent = await res.text();
+        logsOutput.textContent = await res.text() || "(no logs)";
       } catch (err) {
         logsError.textContent = `Logs error: ${err.message}`;
         logsError.style.display = "block";
+        logsOutput.textContent = "";
       }
     }
 
@@ -456,7 +480,15 @@
     }
 
     document.getElementById("refresh").addEventListener("click", loadDashboard);
-    document.getElementById("logs-refresh").addEventListener("click", loadLogs);
+    logsService.addEventListener("change", loadLogs);
+    tailButtons.forEach((btn) => {
+      btn.addEventListener("click", () => {
+        tailButtons.forEach((b) => b.classList.remove("active"));
+        btn.classList.add("active");
+        currentTail = parseInt(btn.dataset.tail, 10);
+        loadLogs();
+      });
+    });
     document.addEventListener("DOMContentLoaded", loadDashboard);
 
     function isHealthy(entry) {
