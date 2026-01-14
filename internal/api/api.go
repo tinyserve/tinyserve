@@ -14,6 +14,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"tinyserve/internal/auth"
@@ -32,6 +33,7 @@ type Handler struct {
 	StatePath      string
 	CloudflaredDir string
 	AccessLogs     *AccessLogs
+	StartedAt      time.Time
 }
 
 func NewHandler(store state.Store, generatedRoot, backupsDir, statePath, cloudflaredDir string) *Handler {
@@ -41,6 +43,7 @@ func NewHandler(store state.Store, generatedRoot, backupsDir, statePath, cloudfl
 		BackupsDir:     backupsDir,
 		StatePath:      statePath,
 		CloudflaredDir: cloudflaredDir,
+		StartedAt:      time.Now(),
 	}
 }
 
@@ -125,6 +128,10 @@ func (h *Handler) handleStatus(w http.ResponseWriter, r *http.Request) {
 		"tunnel":               tunnel,
 		"tunnel_config":        tunnelConfig,
 		"has_cloudflare_token": st.Settings.CloudflareAPIToken != "",
+		"uptime_seconds":       int(time.Since(h.StartedAt).Seconds()),
+	}
+	if freeBytes, err := freeDiskSpace("/"); err == nil {
+		resp["free_disk_bytes"] = freeBytes
 	}
 	writeJSON(w, resp)
 }
@@ -1717,4 +1724,12 @@ func (h *Handler) handleVersion(w http.ResponseWriter, r *http.Request) {
 		"commit":  version.Commit,
 		"date":    version.Date,
 	})
+}
+
+func freeDiskSpace(path string) (uint64, error) {
+	var stat syscall.Statfs_t
+	if err := syscall.Statfs(path, &stat); err != nil {
+		return 0, err
+	}
+	return stat.Bavail * uint64(stat.Bsize), nil
 }

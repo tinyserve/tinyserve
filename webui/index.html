@@ -255,6 +255,14 @@
           <div class="label">cloudflared</div>
           <div class="inline-muted" id="tunnel-health">—</div>
         </div>
+        <div class="card">
+          <div class="metric" id="uptime">—</div>
+          <div class="label">Uptime</div>
+        </div>
+        <div class="card">
+          <div class="metric" id="free-disk">—</div>
+          <div class="label">Free disk</div>
+        </div>
       </div>
       <div class="error" id="status-error"></div>
     </div>
@@ -292,6 +300,8 @@
     const proxyHealth = document.getElementById("proxy-health");
     const tunnelStatus = document.getElementById("tunnel-status");
     const tunnelHealth = document.getElementById("tunnel-health");
+    const uptimeEl = document.getElementById("uptime");
+    const freeDiskEl = document.getElementById("free-disk");
     const logsService = document.getElementById("logs-service");
     const logsOutput = document.getElementById("logs-output");
     const logsError = document.getElementById("logs-error");
@@ -321,6 +331,25 @@
       tunnelStatus.textContent = tunnel.state || "unknown";
       tunnelStatus.className = isHealthy(tunnel) ? "metric ok" : "metric warn";
       tunnelHealth.textContent = tunnel.health || "";
+
+      uptimeEl.textContent = data.uptime_seconds != null ? formatUptime(data.uptime_seconds) : "—";
+      freeDiskEl.textContent = data.free_disk_bytes != null ? formatBytes(data.free_disk_bytes) : "—";
+    }
+
+    function formatUptime(seconds) {
+      const d = Math.floor(seconds / 86400);
+      const h = Math.floor((seconds % 86400) / 3600);
+      const m = Math.floor((seconds % 3600) / 60);
+      if (d > 0) return `${d}d ${h}h`;
+      if (h > 0) return `${h}h ${m}m`;
+      return `${m}m`;
+    }
+
+    function formatBytes(bytes) {
+      if (bytes < 1024) return bytes + " B";
+      if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + " KB";
+      if (bytes < 1024 * 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(1) + " MB";
+      return (bytes / (1024 * 1024 * 1024)).toFixed(1) + " GB";
     }
 
     // Safely escape HTML to prevent XSS
