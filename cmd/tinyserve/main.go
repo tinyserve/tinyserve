@@ -116,6 +116,9 @@ remote:
   remote token create [--name] create a deploy token
   remote token list            list all tokens
   remote token revoke <id>     revoke a token
+  remote auth cloudflare-access --team-domain <domain> --policy-aud <aud>
+                               enable Cloudflare Access authentication for UI
+  remote auth disable          disable browser authentication (WARNING: UI will be public)
 `)
 }
 
@@ -1130,7 +1133,7 @@ func openBrowser(url string) {
 
 func cmdRemote(args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: tinyserve remote <enable|disable|token> ...")
+		return fmt.Errorf("usage: tinyserve remote <enable|disable|token|auth> ...")
 	}
 	switch args[0] {
 	case "enable":
@@ -1139,6 +1142,8 @@ func cmdRemote(args []string) error {
 		return cmdRemoteDisable()
 	case "token":
 		return cmdRemoteToken(args[1:])
+	case "auth":
+		return cmdRemoteAuth(args[1:])
 	default:
 		return fmt.Errorf("unknown remote subcommand: %s", args[0])
 	}
@@ -1244,7 +1249,46 @@ func cmdRemoteEnable(args []string) error {
 			fmt.Println("  Run 'tinyserve deploy' to start the tunnel")
 		}
 	}
+
+	// Show auth warning if UI is enabled but no auth configured
+	if uiHostname != "" {
+		if !hasAuthConfigured() {
+			fmt.Println()
+			fmt.Println("⚠️  WARNING: UI has no authentication configured!")
+			fmt.Println("   Anyone with the URL can access your dashboard.")
+			fmt.Println()
+			fmt.Println("   To protect your UI with Cloudflare Access:")
+			fmt.Println("   1. Create an Access Application in Cloudflare Zero Trust dashboard")
+			fmt.Println("   2. Run: tinyserve remote auth cloudflare-access --team-domain <your-team>.cloudflareaccess.com --policy-aud <aud>")
+		}
+	}
 	return nil
+}
+
+func hasAuthConfigured() bool {
+	resp, err := http.Get(apiBase() + "/status")
+	if err != nil {
+		return false
+	}
+	defer resp.Body.Close()
+	var status map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&status); err != nil {
+		return false
+	}
+	settings, ok := status["settings"].(map[string]any)
+	if !ok {
+		return false
+	}
+	remote, ok := settings["remote"].(map[string]any)
+	if !ok {
+		return false
+	}
+	browserAuth, ok := remote["browser_auth"].(map[string]any)
+	if !ok {
+		return false
+	}
+	authType, _ := browserAuth["type"].(string)
+	return authType != "" && authType != "none"
 }
 
 func cmdRemoteDisable() error {
@@ -1415,5 +1459,96 @@ func cmdRemoteTokenRevoke(args []string) error {
 		return fmt.Errorf("revoke token failed: %s (%s)", resp.Status, strings.TrimSpace(string(data)))
 	}
 	fmt.Printf("✓ Token %s revoked\n", tokenID)
+	return nil
+}
+
+func cmdRemoteAuth(args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("usage: tinyserve remote auth <cloudflare-access|disable>")
+	}
+	switch args[0] {
+	case "cloudflare-access":
+		return cmdRemoteAuthCloudflareAccess(args[1:])
+	case "disable":
+		return cmdRemoteAuthDisable()
+	default:
+		return fmt.Errorf("unknown auth type: %s (supported: cloudflare-access, disable)", args[0])
+	}
+}
+
+func cmdRemoteAuthCloudflareAccess(args []string) error {
+	var teamDomain, policyAUD string
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--team-domain":
+			i++
+			if i >= len(args) {
+				return fmt.Errorf("--team-domain requires a value")
+			}
+			teamDomain = args[i]
+		case "--policy-aud":
+			i++
+			if i >= len(args) {
+				return fmt.Errorf("--policy-aud requires a value")
+			}
+			policyAUD = args[i]
+		default:
+			return fmt.Errorf("unknown flag: %s", args[i])
+		}
+	}
+	if teamDomain == "" {
+		return fmt.Errorf("--team-domain is required (e.g., yourteam.cloudflareaccess.com)")
+	}
+	if policyAUD == "" {
+		return fmt.Errorf("--policy-aud is required (Application Audience tag from Cloudflare Access)")
+	}
+
+	payload := map[string]any{
+		"type":        "cloudflare_access",
+		"team_domain": teamDomain,
+		"policy_aud":  policyAUD,
+	}
+	body, _ := json.Marshal(payload)
+	req, err := http.NewRequest(http.MethodPost, apiBase()+"/remote/auth", bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return wrapConnError(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		data, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("configure auth failed: %s (%s)", resp.Status, strings.TrimSpace(string(data)))
+	}
+	fmt.Println("✓ Browser authentication configured: Cloudflare Access")
+	fmt.Printf("  Team domain: %s\n", teamDomain)
+	fmt.Println("  Restart not required - takes effect immediately")
+	return nil
+}
+
+func cmdRemoteAuthDisable() error {
+	payload := map[string]any{
+		"type": "none",
+	}
+	body, _ := json.Marshal(payload)
+	req, err := http.NewRequest(http.MethodPost, apiBase()+"/remote/auth", bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return wrapConnError(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		data, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("disable auth failed: %s (%s)", resp.Status, strings.TrimSpace(string(data)))
+	}
+	fmt.Println("✓ Browser authentication disabled")
+	fmt.Println("  WARNING: UI is now accessible without authentication!")
 	return nil
 }

@@ -61,6 +61,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, browserAuth *BrowserAuthMid
 
 	mux.HandleFunc("/remote/enable", h.handleRemoteEnable)
 	mux.HandleFunc("/remote/disable", h.handleRemoteDisable)
+	mux.HandleFunc("/remote/auth", h.handleRemoteAuth)
 
 	mux.Handle("/me", browserAuth.Wrap(http.HandlerFunc(h.handleMe)))
 }
@@ -1646,6 +1647,64 @@ func (h *Handler) handleRemoteDisable(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, map[string]any{"status": "disabled"})
+}
+
+func (h *Handler) handleRemoteAuth(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		Type       string `json:"type"`
+		TeamDomain string `json:"team_domain,omitempty"`
+		PolicyAUD  string `json:"policy_aud,omitempty"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, fmt.Sprintf("invalid request: %v", err), http.StatusBadRequest)
+		return
+	}
+
+	ctx := r.Context()
+	st, err := h.Store.Load(ctx)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("load state: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	switch req.Type {
+	case "cloudflare_access":
+		if req.TeamDomain == "" {
+			http.Error(w, "team_domain is required for cloudflare_access", http.StatusBadRequest)
+			return
+		}
+		if req.PolicyAUD == "" {
+			http.Error(w, "policy_aud is required for cloudflare_access", http.StatusBadRequest)
+			return
+		}
+		st.Settings.Remote.BrowserAuth = state.BrowserAuthSettings{
+			Type:       "cloudflare_access",
+			TeamDomain: req.TeamDomain,
+			PolicyAUD:  req.PolicyAUD,
+		}
+	case "none", "":
+		st.Settings.Remote.BrowserAuth = state.BrowserAuthSettings{
+			Type: "none",
+		}
+	default:
+		http.Error(w, fmt.Sprintf("unknown auth type: %s", req.Type), http.StatusBadRequest)
+		return
+	}
+
+	if err := h.Store.Save(ctx, st); err != nil {
+		http.Error(w, fmt.Sprintf("save state: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	writeJSON(w, map[string]any{
+		"status": "configured",
+		"type":   st.Settings.Remote.BrowserAuth.Type,
+	})
 }
 
 func (h *Handler) handleVersion(w http.ResponseWriter, r *http.Request) {
