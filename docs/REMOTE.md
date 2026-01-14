@@ -81,7 +81,7 @@ For human access to the dashboard. Options:
 
 ```bash
 # Enable remote access (adds routes to Cloudflare Tunnel)
-tinyserve remote enable --ui-hostname ui.example.com --api-hostname api.example.com
+tinyserve remote enable --ui-hostname ui.example.com --api-hostname api.example.com --cloudflare
 
 # Disable remote access (removes route)
 tinyserve remote disable
@@ -90,6 +90,10 @@ tinyserve remote disable
 tinyserve remote token create [--name "github-actions"]
 tinyserve remote token list
 tinyserve remote token revoke <token-id>
+
+# Configure browser authentication
+tinyserve remote auth cloudflare-access --team-domain <team>.cloudflareaccess.com --policy-aud <aud>
+tinyserve remote auth disable
 ```
 
 ## Setup Flow
@@ -115,14 +119,81 @@ tinyserve remote token create --name "github-actions"
 # Store this securely - it won't be shown again
 ```
 
-### 3. Configure browser auth (optional but recommended)
+### 3. Configure browser auth (recommended)
 
-For Cloudflare Access:
-1. Go to Cloudflare Zero Trust dashboard
-2. Create an Access Application for `ui.example.com`
-3. Add authentication policy (e.g., allow specific emails)
+Without authentication, anyone with your UI URL can access the dashboard. Cloudflare Access provides authentication at the edge before requests reach your server.
 
-Or use one of the alternative options above.
+**Note:** You do NOT need the WARP client. Cloudflare Access works through the browser - it redirects to a login page and sets a JWT cookie after authentication.
+
+#### Step 1: Access Zero Trust Dashboard
+
+Go to https://one.dash.cloudflare.com/
+
+If you haven't set up Zero Trust before, you'll need to create an organization (free for up to 50 users).
+
+#### Step 2: Find your Team Domain
+
+Your team domain is shown in the Zero Trust dashboard:
+- Look at the URL or go to **Settings → General → Team domain**
+- Format: `<team-name>.cloudflareaccess.com`
+
+#### Step 3: Create an Access Application
+
+1. Go to **Access → Applications → Add an application**
+2. Choose **Self-hosted**
+3. Configure the application:
+   - **Application name**: `tinyserve` (or any name you prefer)
+   - **Session Duration**: 24 hours (adjust as needed)
+   - **Application domain**: your UI hostname (e.g., `tinyserve.example.com`)
+4. Click **Next**
+
+#### Step 4: Create an Access Policy
+
+1. **Policy name**: `Allow me` (or descriptive name)
+2. **Action**: `Allow`
+3. **Configure rules** → Include:
+   - **Selector**: `Emails`
+   - **Value**: your email address (e.g., `you@example.com`)
+4. Click **Next** → **Add application**
+
+You can add multiple rules (other emails, email domains, identity providers like Google/GitHub, etc.)
+
+#### Step 5: Get the Application Audience (AUD)
+
+After creating the application:
+1. Go to **Access → Applications**
+2. Click on your application name
+3. Find **Application Audience (AUD) Tag** in the overview - it's a long string like `32eafc7a8e7b123...`
+4. Copy this value
+
+#### Step 6: Configure tinyserve
+
+```bash
+tinyserve remote auth cloudflare-access \
+  --team-domain <team-name>.cloudflareaccess.com \
+  --policy-aud <aud-tag-from-step-5>
+```
+
+Example:
+```bash
+tinyserve remote auth cloudflare-access \
+  --team-domain mycompany.cloudflareaccess.com \
+  --policy-aud 32eafc7a8e7b4f2a9c1d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b
+```
+
+#### Verify it works
+
+1. Open your UI hostname in a browser (use incognito to avoid cached sessions)
+2. You should be redirected to a Cloudflare login page
+3. After authenticating, you'll be redirected to the tinyserve UI
+
+#### Disable authentication (not recommended)
+
+```bash
+tinyserve remote auth disable
+```
+
+**Warning:** This makes your UI publicly accessible to anyone with the URL.
 
 ### 4. Set up GitHub Actions
 
