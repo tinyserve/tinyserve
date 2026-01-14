@@ -38,6 +38,28 @@ ifconfig | grep "inet "
 - Verify SSH works from another machine on the LAN: `ssh <user>@<mac-mini-ip>` (or `ssh <user>@<hostname>.local`).
 - For off-site access, rely on Cloudflare Tunnel + Access rather than opening ports on your router.
 
+**Prevent sleep (critical for headless servers)**:
+
+Mac mini will sleep when SSH sessions end, causing Cloudflare Tunnel and all services to become unreachable. Disable sleep:
+
+```bash
+# Disable sleep entirely (recommended for servers)
+sudo pmset -a sleep 0
+sudo pmset -a disksleep 0
+sudo pmset -a displaysleep 0
+
+# Prevent sleep when display is off
+sudo pmset -a powernap 0
+
+# Verify settings
+pmset -g
+```
+
+Alternatively, via System Settings:
+- System Settings → Energy → set "Turn display off after" to "Never" (or a reasonable time).
+- Uncheck "Prevent automatic sleeping when the display is off" if present, or better, use `pmset` commands above.
+
+
 ## 2) Install Homebrew
 ```bash
 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
