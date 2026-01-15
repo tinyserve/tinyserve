@@ -4,8 +4,7 @@ Operational documentation for tinyserve.
 
 ## Contents
 
-- [PREPARE_ENVIRONMENT.md](PREPARE_ENVIRONMENT.md) - Initial Mac mini setup (Docker, firewall, etc.)
-- [GETTING_STARTED.md](GETTING_STARTED.md) - First-time tinyserve setup with Cloudflare Tunnel
+- [GETTING_STARTED.md](GETTING_STARTED.md) - Environment setup + first-time tinyserve setup with Cloudflare Tunnel
 - [ADD_NEW_SERVICE.md](ADD_NEW_SERVICE.md) - Adding and managing services
 - [LAUNCHD.md](LAUNCHD.md) - Installing and managing tinyserved as a LaunchAgent
 - [REMOTE.md](REMOTE.md) - Remote access, webhooks, and authentication

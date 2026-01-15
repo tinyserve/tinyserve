@@ -60,19 +60,20 @@ type ServiceHealthcheck struct {
 }
 
 type Service struct {
-	ID           string              `json:"id"`
-	Name         string              `json:"name"`
-	Type         string              `json:"type"`
-	Image        string              `json:"image"`
-	InternalPort int                 `json:"internal_port"`
-	Hostnames    []string            `json:"hostnames,omitempty"`
-	Env          map[string]string   `json:"env,omitempty"`
-	Volumes      []string            `json:"volumes,omitempty"`
-	Healthcheck  *ServiceHealthcheck `json:"healthcheck,omitempty"`
-	Resources    ServiceResources    `json:"resources"`
-	Enabled      bool                `json:"enabled"`
-	LastDeploy   *time.Time          `json:"last_deploy,omitempty"`
-	Status       string              `json:"status,omitempty"`
+	ID            string              `json:"id"`
+	Name          string              `json:"name"`
+	Type          string              `json:"type"`
+	Image         string              `json:"image"`
+	InternalPort  int                 `json:"internal_port"`
+	Hostnames     []string            `json:"hostnames,omitempty"`
+	Env           map[string]string   `json:"env,omitempty"`
+	Volumes       []string            `json:"volumes,omitempty"`
+	Healthcheck   *ServiceHealthcheck `json:"healthcheck,omitempty"`
+	Resources     ServiceResources    `json:"resources"`
+	Enabled       bool                `json:"enabled"`
+	LastDeploy    *time.Time          `json:"last_deploy,omitempty"`
+	Status        string              `json:"status,omitempty"`
+	UptimeSeconds int                 `json:"uptime_seconds,omitempty"`
 }
 
 const ServiceTypeRegistryImage = "registry-image"

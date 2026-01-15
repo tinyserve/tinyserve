@@ -4,6 +4,8 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>TinyServe dashboard</title>
+  <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png">
+  <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16.png">
   <style>
     :root {
       --bg: #0f172a;
@@ -133,6 +135,18 @@
       border: 1px solid var(--border);
       background: rgba(255,255,255,0.06);
     }
+    a.badge {
+      color: inherit;
+      text-decoration: none;
+    }
+    .badge.link-badge {
+      border-color: rgba(59,130,246,0.5);
+      color: #93c5fd;
+      background: rgba(59,130,246,0.12);
+    }
+    .badge.link-badge:hover {
+      background: rgba(59,130,246,0.22);
+    }
     .badge.ok { color: var(--success); border-color: rgba(34,197,94,0.5); }
     .badge.warn { color: var(--warning); border-color: rgba(245,158,11,0.5); }
     .services {
@@ -174,6 +188,48 @@
       gap: 10px;
       align-items: center;
       margin-bottom: 10px;
+    }
+    .tag-group {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .tag-label {
+      color: var(--muted);
+      font-size: 12px;
+      letter-spacing: 0.02em;
+      text-transform: uppercase;
+    }
+    .tag-list {
+      display: flex;
+      gap: 6px;
+      flex-wrap: wrap;
+    }
+    .tag {
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      padding: 4px 10px;
+      background: rgba(17,24,39,0.8);
+      color: var(--text);
+      font-size: 12px;
+      cursor: pointer;
+    }
+    .tag.active {
+      border-color: rgba(59,130,246,0.7);
+      color: #bfdbfe;
+      background: rgba(59,130,246,0.22);
+    }
+    .tail-controls {
+      margin-left: auto;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .tail-label {
+      color: var(--muted);
+      font-size: 12px;
     }
     select,
     input[type="number"] {
@@ -276,15 +332,20 @@
     <div class="section">
       <h2>Logs</h2>
       <div class="log-controls">
-        <select id="logs-service"></select>
-        <div class="tail-buttons">
-          <button class="tail-btn" data-tail="50">50</button>
-          <button class="tail-btn active" data-tail="200">200</button>
-          <button class="tail-btn" data-tail="500">500</button>
-          <button class="tail-btn" data-tail="1000">1000</button>
+        <div class="tag-group">
+          <div class="tag-label">Access</div>
+          <div id="access-tags" class="tag-list"></div>
+        </div>
+        <div class="tag-group">
+          <div class="tag-label">Containers</div>
+          <div id="container-tags" class="tag-list"></div>
+        </div>
+        <div class="tail-controls">
+          <div class="tail-label">Last <span id="tail-count">200</span> lines</div>
+          <button id="load-earlier" class="tail-btn">Load earlier</button>
         </div>
       </div>
-      <pre id="logs-output" class="logs-output">Select a source and load logs.</pre>
+      <pre id="logs-output" class="logs-output">Select a log source.</pre>
       <div class="error" id="logs-error"></div>
     </div>
   </div>
@@ -302,11 +363,14 @@
     const tunnelHealth = document.getElementById("tunnel-health");
     const uptimeEl = document.getElementById("uptime");
     const freeDiskEl = document.getElementById("free-disk");
-    const logsService = document.getElementById("logs-service");
+    const accessTags = document.getElementById("access-tags");
+    const containerTags = document.getElementById("container-tags");
+    const tailCountEl = document.getElementById("tail-count");
+    const loadEarlierBtn = document.getElementById("load-earlier");
     const logsOutput = document.getElementById("logs-output");
     const logsError = document.getElementById("logs-error");
-    const tailButtons = document.querySelectorAll(".tail-btn");
     let currentTail = 200;
+    let currentLogSource = "ui";
 
     async function fetchJSON(path) {
       const res = await fetch(path, { cache: "no-store" });
@@ -350,6 +414,14 @@
       if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + " KB";
       if (bytes < 1024 * 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(1) + " MB";
       return (bytes / (1024 * 1024 * 1024)).toFixed(1) + " GB";
+    }
+
+    function hostToUrl(host) {
+      if (!host) return "";
+      const lower = host.toLowerCase();
+      const isLocal = lower === "localhost" || lower.endsWith(".local") || /^[0-9.]+$/.test(lower);
+      const scheme = isLocal ? "http" : "https";
+      return `${scheme}://${host}`;
     }
 
     // Safely escape HTML to prevent XSS
@@ -403,6 +475,10 @@
         portDiv.className = "inline-muted";
         portDiv.textContent = "Port: " + (svc.internal_port || "—");
 
+        const uptimeDiv = document.createElement("div");
+        uptimeDiv.className = "inline-muted";
+        uptimeDiv.textContent = "Uptime: " + (svc.uptime_seconds != null ? formatUptime(svc.uptime_seconds) : "—");
+
         const hostsDiv = document.createElement("div");
         hostsDiv.className = "inline-muted";
         hostsDiv.appendChild(document.createTextNode("Hosts: "));
@@ -412,9 +488,15 @@
           hostsDiv.appendChild(document.createTextNode("—"));
         } else {
           hostnames.forEach((h, i) => {
-            const badge = document.createElement("span");
-            badge.className = "badge";
-            badge.textContent = h;
+            const url = hostToUrl(h);
+            const badge = document.createElement("a");
+            badge.className = "badge link-badge";
+            badge.textContent = url || h;
+            if (url) {
+              badge.href = url;
+              badge.target = "_blank";
+              badge.rel = "noopener noreferrer";
+            }
             hostsDiv.appendChild(badge);
             if (i < hostnames.length - 1) {
               hostsDiv.appendChild(document.createTextNode(" "));
@@ -426,45 +508,71 @@
         serviceEl.appendChild(pillRow);
         serviceEl.appendChild(imageDiv);
         serviceEl.appendChild(portDiv);
+        serviceEl.appendChild(uptimeDiv);
         serviceEl.appendChild(hostsDiv);
 
         servicesContainer.appendChild(serviceEl);
       }
     }
 
-    function renderLogOptions(services) {
-      const current = logsService.value;
-      logsService.innerHTML = "";
-      const builtins = [
+    function renderLogTags(services) {
+      const accessSources = [
         { value: "ui", label: "UI access" },
         { value: "api", label: "API access" },
         { value: "webhook", label: "Webhook access" },
-        { value: "traefik", label: "traefik (container)" },
-        { value: "cloudflared", label: "cloudflared (container)" },
-        { value: "whoami", label: "whoami (container)" },
       ];
-      for (const entry of builtins) {
-        const opt = document.createElement("option");
-        opt.value = entry.value;
-        opt.textContent = entry.label;
-        logsService.appendChild(opt);
-      }
+      const containerSources = [
+        { value: "traefik", label: "traefik" },
+        { value: "cloudflared", label: "cloudflared" },
+        { value: "whoami", label: "whoami" },
+      ];
       for (const svc of services || []) {
-        const opt = document.createElement("option");
-        opt.value = svc.name || "";
-        opt.textContent = `${svc.name || "unnamed"} (service)`;
-        logsService.appendChild(opt);
+        if (svc && svc.name) {
+          containerSources.push({ value: svc.name, label: svc.name });
+        }
       }
-      if (current) {
-        logsService.value = current;
-      } else {
-        logsService.value = "ui";
+
+      const available = new Set();
+      accessTags.innerHTML = "";
+      containerTags.innerHTML = "";
+
+      function addTag(entry, target) {
+        if (!entry.value) return;
+        available.add(entry.value);
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "tag";
+        btn.textContent = entry.label || entry.value;
+        btn.dataset.value = entry.value;
+        if (entry.value === currentLogSource) {
+          btn.classList.add("active");
+        }
+        btn.addEventListener("click", () => {
+          currentLogSource = entry.value;
+          document.querySelectorAll(".tag").forEach((el) => el.classList.remove("active"));
+          btn.classList.add("active");
+          loadLogs();
+        });
+        target.appendChild(btn);
+      }
+
+      for (const entry of accessSources) {
+        addTag(entry, accessTags);
+      }
+      for (const entry of containerSources) {
+        addTag(entry, containerTags);
+      }
+
+      if (!available.has(currentLogSource)) {
+        currentLogSource = accessSources[0]?.value || containerSources[0]?.value || "";
+        const active = document.querySelector(`.tag[data-value=\"${currentLogSource}\"]`);
+        if (active) active.classList.add("active");
       }
     }
 
     async function loadLogs() {
       logsError.style.display = "none";
-      const service = logsService.value;
+      const service = currentLogSource;
       if (!service) {
         logsOutput.textContent = "Select a log source.";
         return;
@@ -501,7 +609,10 @@
       try {
         const services = await fetchJSON("/services");
         renderServices(services);
-        renderLogOptions(services);
+        renderLogTags(services);
+        if (currentLogSource) {
+          loadLogs();
+        }
       } catch (err) {
         servicesError.textContent = `Services error: ${err.message}`;
         servicesError.style.display = "block";
@@ -509,14 +620,11 @@
     }
 
     document.getElementById("refresh").addEventListener("click", loadDashboard);
-    logsService.addEventListener("change", loadLogs);
-    tailButtons.forEach((btn) => {
-      btn.addEventListener("click", () => {
-        tailButtons.forEach((b) => b.classList.remove("active"));
-        btn.classList.add("active");
-        currentTail = parseInt(btn.dataset.tail, 10);
-        loadLogs();
-      });
+    tailCountEl.textContent = String(currentTail);
+    loadEarlierBtn.addEventListener("click", () => {
+      currentTail += 200;
+      tailCountEl.textContent = String(currentTail);
+      loadLogs();
     });
     document.addEventListener("DOMContentLoaded", loadDashboard);
 

@@ -61,10 +61,11 @@ func (r *Runner) PS(ctx context.Context) (string, error) {
 }
 
 type ContainerStatus struct {
-	Name    string `json:"Name"`
-	Service string `json:"Service"`
-	State   string `json:"State"`
-	Health  string `json:"Health"`
+	Name      string     `json:"Name"`
+	Service   string     `json:"Service"`
+	State     string     `json:"State"`
+	Health    string     `json:"Health"`
+	StartedAt *time.Time `json:"-"`
 }
 
 // PSStatus returns structured container status information if available along with the raw output.
@@ -94,6 +95,48 @@ func (r *Runner) PSStatus(ctx context.Context) ([]ContainerStatus, string, error
 		return nil, out, fmt.Errorf("read compose ps json: %w", err)
 	}
 	return containers, out, nil
+}
+
+// InspectStartedAt returns container start times keyed by container name.
+func (r *Runner) InspectStartedAt(ctx context.Context, names []string) (map[string]time.Time, error) {
+	started := make(map[string]time.Time)
+	if len(names) == 0 {
+		return started, nil
+	}
+
+	args := append([]string{"inspect", "--format", "{{.Name}}|{{.State.StartedAt}}"}, names...)
+	out, err := r.run(ctx, args...)
+	if err != nil && strings.TrimSpace(out) == "" {
+		return nil, err
+	}
+
+	scanner := bufio.NewScanner(strings.NewReader(out))
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" {
+			continue
+		}
+		parts := strings.SplitN(line, "|", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		name := strings.TrimPrefix(parts[0], "/")
+		if name == "" {
+			continue
+		}
+		if parts[1] == "" {
+			continue
+		}
+		when, err := time.Parse(time.RFC3339Nano, parts[1])
+		if err != nil {
+			continue
+		}
+		started[name] = when
+	}
+	if err := scanner.Err(); err != nil {
+		return started, err
+	}
+	return started, nil
 }
 
 // WaitHealthy polls container status until all target services are running and healthy.

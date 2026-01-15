@@ -61,6 +61,19 @@ This assumes tinyserve is installed, the daemon is running on `127.0.0.1:7070`, 
 - For sensitive env vars, prefer secrets management later; for now, store minimal secrets and limit permissions.
 - If using Cloudflare Access, set policies on the hostnames you expose (e.g., allow your team emails only).
 
+### Using `.env` files
+- tinyserve does **not** auto-load `.env` files. Use `--env` flags or `tinyserve service edit` to set env vars in the service config.
+- If your app expects a `.env` file on disk, keep it **outside** `generated/` (that folder is regenerated) and mount it as a volume.
+- Recommended location: `~/Library/Application Support/tinyserve/services/<service>/.env` (or any stable path you manage).
+- Example:
+  ```bash
+  tinyserve service add \
+    --name myapp \
+    --image ghcr.io/you/myapp:prod \
+    --port 8080 \
+    --volume "/Users/you/Library/Application Support/tinyserve/services/myapp/.env:/app/.env:ro"
+  ```
+
 ## Default domain and hostname routing
 All services are routed via hostname (not ports). Traefik handles routing based on the `Host` header, and Cloudflare Tunnel forwards traffic to Traefik.
 

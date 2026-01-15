@@ -150,6 +150,9 @@ func (h *Handler) handleServices(w http.ResponseWriter, r *http.Request) {
 			c := svc
 			if cs, ok := statusMap[sanitizeName(svc.Name)]; ok {
 				c.Status = describeStatus(cs)
+				if cs.StartedAt != nil {
+					c.UptimeSeconds = int(time.Since(*cs.StartedAt).Seconds())
+				}
 			} else if c.Status == "" {
 				c.Status = "unknown"
 			}
@@ -645,10 +648,13 @@ func (h *Handler) handleDeploy(w http.ResponseWriter, r *http.Request) {
 	log.Printf("deploy: targets=%v", targets)
 
 	log.Printf("deploy: docker pull start")
-	if _, err := runner.Pull(ctx, targets...); err != nil && !strings.Contains(err.Error(), "No such service") {
+	pullOutput := ""
+	if out, err := runner.Pull(ctx, targets...); err != nil && !strings.Contains(err.Error(), "No such service") {
 		log.Printf("deploy: docker pull failed: %v", err)
 		http.Error(w, fmt.Sprintf("docker pull: %v", err), http.StatusInternalServerError)
 		return
+	} else {
+		pullOutput = strings.TrimSpace(out)
 	}
 	log.Printf("deploy: docker pull complete")
 
@@ -713,6 +719,10 @@ func (h *Handler) handleDeploy(w http.ResponseWriter, r *http.Request) {
 	resp := map[string]any{
 		"status": "deployed",
 		"time":   now.Format(time.RFC3339),
+	}
+	if pullOutput != "" {
+		resp["pull_output"] = pullOutput
+		resp["pull_summary"] = summarizePullOutput(pullOutput)
 	}
 	writeJSON(w, resp)
 	log.Printf("deploy: complete (duration=%s)", time.Since(start))
@@ -1214,8 +1224,20 @@ func (h *Handler) containerStatus(ctx context.Context) (map[string]docker.Contai
 	if err != nil {
 		return nil, err
 	}
+	names := make([]string, 0, len(containers))
+	for _, c := range containers {
+		if c.Name != "" {
+			names = append(names, c.Name)
+		}
+	}
+	startedMap, _ := runner.InspectStartedAt(ctx, names)
 	statusMap := make(map[string]docker.ContainerStatus)
 	for _, c := range containers {
+		if c.Name != "" {
+			if startedAt, ok := startedMap[strings.TrimPrefix(c.Name, "/")]; ok {
+				c.StartedAt = &startedAt
+			}
+		}
 		statusMap[strings.ToLower(c.Service)] = c
 	}
 	return statusMap, nil
@@ -1243,6 +1265,22 @@ func describeStatus(c docker.ContainerStatus) string {
 		return fmt.Sprintf("%s (%s)", c.State, c.Health)
 	}
 	return c.State
+}
+
+func summarizePullOutput(out string) string {
+	lower := strings.ToLower(out)
+	updated := strings.Contains(lower, "downloaded newer image")
+	upToDate := strings.Contains(lower, "image is up to date")
+	switch {
+	case updated && upToDate:
+		return "mixed"
+	case updated:
+		return "updated"
+	case upToDate:
+		return "up_to_date"
+	default:
+		return "unknown"
+	}
 }
 
 func sanitizeName(name string) string {
