@@ -113,6 +113,10 @@ func writeCompose(path string, s state.State) error {
       - "traefik.enable=true"
       - "traefik.http.routers.whoami.rule=Host(`+"`%s`"+`)"
       - "traefik.http.services.whoami.loadbalancer.server.port=80"
+      - "traefik.http.middlewares.whoami-nocache.headers.customResponseHeaders.Cache-Control=no-store, no-cache, must-revalidate, max-age=0"
+      - "traefik.http.middlewares.whoami-nocache.headers.customResponseHeaders.Pragma=no-cache"
+      - "traefik.http.middlewares.whoami-nocache.headers.customResponseHeaders.Expires=0"
+      - "traefik.http.routers.whoami.middlewares=whoami-nocache"
 `, whoamiHost))
 
 	for _, svc := range s.Services {
@@ -249,11 +253,16 @@ func buildTraefikLabels(name string, svc state.Service, defaultDomain string) []
 	if len(hosts) == 0 && defaultDomain != "" {
 		hosts = []string{fmt.Sprintf("%s.%s", name, defaultDomain)}
 	}
+	middleware := fmt.Sprintf("%s-nocache", name)
+	labels = append(labels, fmt.Sprintf("traefik.http.middlewares.%s.headers.customResponseHeaders.Cache-Control=no-store, no-cache, must-revalidate, max-age=0", middleware))
+	labels = append(labels, fmt.Sprintf("traefik.http.middlewares.%s.headers.customResponseHeaders.Pragma=no-cache", middleware))
+	labels = append(labels, fmt.Sprintf("traefik.http.middlewares.%s.headers.customResponseHeaders.Expires=0", middleware))
 	for i, h := range hosts {
 		routerName := fmt.Sprintf("%s-%d", name, i)
 		labels = append(labels, fmt.Sprintf("traefik.http.routers.%s.rule=Host(`%s`)", routerName, h))
 		labels = append(labels, fmt.Sprintf("traefik.http.routers.%s.entrypoints=web", routerName))
 		labels = append(labels, fmt.Sprintf("traefik.http.routers.%s.service=%s", routerName, name))
+		labels = append(labels, fmt.Sprintf("traefik.http.routers.%s.middlewares=%s", routerName, middleware))
 	}
 	if svc.InternalPort > 0 {
 		labels = append(labels, fmt.Sprintf("traefik.http.services.%s.loadbalancer.server.port=%d", name, svc.InternalPort))

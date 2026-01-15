@@ -101,6 +101,7 @@ func (h *Handler) handleServicesWithAuth(authMw *AuthMiddleware) http.HandlerFun
 }
 
 func (h *Handler) handleStatus(w http.ResponseWriter, r *http.Request) {
+	setNoCache(w)
 	st, err := h.Store.Load(r.Context())
 	if err != nil {
 		http.Error(w, fmt.Sprintf("load state: %v", err), http.StatusInternalServerError)
@@ -137,6 +138,7 @@ func (h *Handler) handleStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handleServices(w http.ResponseWriter, r *http.Request) {
+	setNoCache(w)
 	switch r.Method {
 	case http.MethodGet:
 		st, err := h.Store.Load(r.Context())
@@ -1265,6 +1267,12 @@ func describeStatus(c docker.ContainerStatus) string {
 		return fmt.Sprintf("%s (%s)", c.State, c.Health)
 	}
 	return c.State
+}
+
+func setNoCache(w http.ResponseWriter) {
+	w.Header().Set("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
+	w.Header().Set("Pragma", "no-cache")
+	w.Header().Set("Expires", "0")
 }
 
 func summarizePullOutput(out string) string {
