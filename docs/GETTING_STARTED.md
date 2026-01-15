@@ -21,42 +21,9 @@ This is the ideal end-to-end flow: prepare a clean Mac mini, install Docker + ti
 ```bash
 # Local hostname (usable as <hostname>.local on the same network)
 scutil --get LocalHostName
-
-# IP address (Ethernet)
-ipconfig getifaddr en0
-
-# IP address (Wi-Fi, if applicable)
-ipconfig getifaddr en1
-
-# List all network interfaces with IPs
-ifconfig | grep "inet "
 ```
 
-**Network recommendations**:
-- Set a DHCP reservation or static IP on your router for the Mac mini to keep the IP stable.
-- macOS Application Firewall: leave it on; tinyserve binds to `127.0.0.1` only. No pf tweaks needed.
-- Verify SSH works from another machine on the LAN: `ssh <user>@<mac-mini-ip>` (or `ssh <user>@<hostname>.local`).
-- For off-site access, rely on Cloudflare Tunnel + Access rather than opening ports on your router.
-
-## 2) Prevent sleep (critical for headless servers)
-
-Mac mini will sleep when SSH sessions end, causing Cloudflare Tunnel and services to become unreachable. Disable sleep:
-
-```bash
-sudo pmset -a sleep 0
-sudo pmset -a disksleep 0
-sudo pmset -a displaysleep 0
-sudo pmset -a powernap 0
-
-# Verify settings
-pmset -g
-```
-
-Alternatively, via System Settings:
-- System Settings → Energy → set "Turn display off after" to "Never" (or a reasonable time).
-- Uncheck "Prevent automatic sleeping when the display is off" if present.
-
-## 3) Install Homebrew
+## 2) Install Homebrew
 ```bash
 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
 ```
@@ -67,7 +34,7 @@ Alternatively, via System Settings:
   ```
 - Verify: `brew --version`
 
-## 4) Install a Docker runtime (no Docker Desktop)
+## 3) Install a Docker runtime
 Pick one:
 - **Colima (recommended)**: `brew install colima docker` then `colima start --arch aarch64 --vm-type vz --cpu 4 --memory 8`
 - **Rancher Desktop** with Docker API enabled (GUI option).
@@ -90,37 +57,23 @@ docker ps
 brew services start colima
 ```
 
-**tinyserve checklist**: Run `tinyserve checklist` to verify Docker and other prerequisites.
+## 4) Install TinyServe (Homebrew) and run checklist
 
-## 5) Install tinyserve (Homebrew)
-- If tinyserve is in Homebrew core: `brew install tinyserve`
-- If using a tap: `brew tap tinyserve/tinyserve` then `brew install tinyserve`
-- Verify: `tinyserve --help`
+```bash
+brew tap tinyserve/tinyserve
+brew install tinyserve
+brew service start docker
+tinyserve checklist # Important to verify all prerequisites
+```
 
-## 6) Tinyserve data root
-- Create the data root (optional, tinyserve will create as needed):
-  ```bash
-  mkdir -p "~/Library/Application Support/tinyserve"/{generated,backups,logs,services,traefik,cloudflared}
-  ```
-
-## 7) Launch the daemon
-- Foreground sanity check:
-  - `TINYSERVE_API=http://127.0.0.1:7070 tinyserved`
-  - In another terminal: `tinyserve status` should return JSON with `status: ok`.
-- Install as LaunchAgent:
-  - `tinyserve launchd install`
-  - `tinyserve launchd status`
-
-## 8) Provide Cloudflare access (recommended)
+## 5) Init TinyServe Provide Cloudflare access (recommended but optional)
 - Prepare a Cloudflare API token with Tunnel + DNS permissions for your domain.
-- Run the one-shot init to create the tunnel and set defaults:
+- Run interactive init to create the tunnel and set defaults:
+  ```bash
+  tinyserve init
   ```
-  tinyserve init \
-    --domain example.com \
-    --cloudflare-api-token $CF_API_TOKEN \
-    --tunnel-name tinyserve-home
-  ```
-- tinyserve will:
+
+- If you choose to use Cloudflare tunnerl, TinyServe will:
   - Create a Cloudflare Tunnel (or reuse if it exists).
   - Store tunnel credentials under `~/Library/Application Support/tinyserve/cloudflared/`.
   - Set `default_domain` and wire the tunnel to Traefik.
@@ -133,33 +86,19 @@ brew services start colima
 - Use a reverse proxy (Traefik/Caddy/Nginx) to terminate TLS with Let's Encrypt.
 - Use Dynamic DNS if your public IP changes.
 
-## 9) Add a service
+## 6) Enable remote access to dashboard UI and API (optional)
+
 ```bash
-tinyserve service add \
-  --name whoami \
-  --image traefik/whoami:v1.10 \
-  --port 80
+remote enable [--hostname H | --ui-hostname H] [--api-hostname H] [--cloudflare] [--deploy]
 ```
-- Since `--hostname` is omitted, tinyserve uses the default domain: `whoami.example.com`.
-- Override with `--hostname custom.otherdomain.com` if needed.
 
-## 10) Deploy
+If you want UI and API to be accessible for internet, check REMOTE.md. 
+
+## 7) Add a service and set up auto deploy from GitHub
 ```bash
-tinyserve deploy
+tinyserve service add --image my_docker_image:v1.10
 ```
-- tinyserve stages configs, runs `docker compose up -d`, waits for health, and promotes on success.
+See ADD_NEW_SERVICE.md for more details.
 
-## 11) Verify
-- Status: `tinyserve status`
-- Logs: `tinyserve logs --service whoami --tail 100`
-- Browser: `https://whoami.example.com` (optionally behind Cloudflare Access).
-
-## 12) Backups (recommended)
+## 8) Backups (recommended)
 Set up S3-compatible backups before running production workloads. See `docs/BACKUP_RESTORE.md` for scripts, schedules, and restore steps.
-
-## 13) Keep it running
-- Install/update the launchd agent:
-  - `tinyserve launchd install`
-  - `tinyserve launchd status`
-- Future updates: `brew upgrade tinyserve && tinyserve launchd uninstall && tinyserve launchd install`
-- Add/remove services or redeploy via the CLI or (when available) the web UI.

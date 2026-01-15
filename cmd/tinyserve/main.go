@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
@@ -893,24 +894,54 @@ func cmdChecklist() error {
 		fmt.Println("✓")
 	}
 
-	// 3. Check tinyserved daemon responding
+	// 3. Check Docker Compose available
+	fmt.Print("Docker Compose available...... ")
+	composeOK := false
+	if _, err := exec.LookPath("docker"); err == nil {
+		if err := exec.Command("docker", "compose", "version").Run(); err == nil {
+			composeOK = true
+			fmt.Println("✓")
+		}
+	}
+	if !composeOK {
+		if _, err := exec.LookPath("docker-compose"); err == nil {
+			if err := exec.Command("docker-compose", "version").Run(); err == nil {
+				composeOK = true
+				fmt.Println("✓ (docker-compose)")
+			}
+		}
+	}
+	if !composeOK {
+		fmt.Println("✗ NOT AVAILABLE")
+		allPassed = false
+	}
+
+	// 4. Check tinyserved daemon responding
 	fmt.Print("tinyserved daemon............. ")
 	client := http.Client{Timeout: 2 * time.Second}
 	resp, err := client.Get(apiBase() + "/status")
+	var statusPayload map[string]any
+	statusOK := false
 	if err != nil {
 		fmt.Println("✗ NOT RESPONDING")
 		allPassed = false
 	} else {
-		resp.Body.Close()
+		defer resp.Body.Close()
 		if resp.StatusCode < 300 {
-			fmt.Println("✓")
+			if err := json.NewDecoder(resp.Body).Decode(&statusPayload); err == nil {
+				fmt.Println("✓")
+				statusOK = true
+			} else {
+				fmt.Println("✗ INVALID JSON")
+				allPassed = false
+			}
 		} else {
 			fmt.Printf("✗ HTTP %d\n", resp.StatusCode)
 			allPassed = false
 		}
 	}
 
-	// 4. Check launchd agent installed (CLI or brew services)
+	// 5. Check launchd agent installed (CLI or brew services)
 	fmt.Print("launchd agent installed....... ")
 	cliPlistPath := os.ExpandEnv("$HOME/Library/LaunchAgents/dev.tinyserve.daemon.plist")
 	brewPlistPath := os.ExpandEnv("$HOME/Library/LaunchAgents/homebrew.mxcl.tinyserve.plist")
@@ -931,7 +962,7 @@ func cmdChecklist() error {
 		allPassed = false
 	}
 
-	// 5. Check FileVault disk encryption (macOS)
+	// 6. Check FileVault disk encryption (macOS)
 	fmt.Print("FileVault encryption.......... ")
 	if runtime.GOOS == "darwin" {
 		cmd = exec.Command("fdesetup", "status")
@@ -947,7 +978,7 @@ func cmdChecklist() error {
 		fmt.Println("- (macOS only)")
 	}
 
-	// 6. Check launchd agent loaded (CLI or brew services)
+	// 7. Check launchd agent loaded (CLI or brew services)
 	fmt.Print("launchd agent loaded.......... ")
 	cmd = exec.Command("launchctl", "list")
 	output, err := cmd.Output()
@@ -961,6 +992,122 @@ func cmdChecklist() error {
 	} else {
 		fmt.Println("✗ NOT LOADED")
 		allPassed = false
+	}
+
+	// 8. Check sleep disabled (macOS)
+	fmt.Print("Sleep disabled............... ")
+	if runtime.GOOS == "darwin" {
+		cmd = exec.Command("pmset", "-g")
+		output, err := cmd.Output()
+		if err != nil {
+			fmt.Println("? (pmset error)")
+		} else {
+			values := map[string]string{}
+			scanner := bufio.NewScanner(bytes.NewReader(output))
+			for scanner.Scan() {
+				fields := strings.Fields(scanner.Text())
+				if len(fields) < 2 {
+					continue
+				}
+				switch fields[0] {
+				case "sleep", "disksleep", "displaysleep", "powernap":
+					values[fields[0]] = fields[1]
+				}
+			}
+			required := []string{"sleep", "disksleep", "displaysleep", "powernap"}
+			missing := []string{}
+			nonZero := []string{}
+			for _, key := range required {
+				val, ok := values[key]
+				if !ok {
+					missing = append(missing, key)
+					continue
+				}
+				if val != "0" {
+					nonZero = append(nonZero, fmt.Sprintf("%s=%s", key, val))
+				}
+			}
+			if len(missing) > 0 {
+				fmt.Printf("? missing %s\n", strings.Join(missing, ", "))
+			} else if len(nonZero) > 0 {
+				fmt.Printf("⚠ %s\n", strings.Join(nonZero, ", "))
+			} else {
+				fmt.Println("✓")
+			}
+		}
+	} else {
+		fmt.Println("- (macOS only)")
+	}
+
+	// 9. Check Xcode Command Line Tools (macOS)
+	fmt.Print("Xcode CLT installed.......... ")
+	if runtime.GOOS == "darwin" {
+		cmd = exec.Command("xcode-select", "-p")
+		if err := cmd.Run(); err != nil {
+			fmt.Println("✗ NOT INSTALLED")
+			allPassed = false
+		} else {
+			fmt.Println("✓")
+		}
+	} else {
+		fmt.Println("- (macOS only)")
+	}
+
+	// 10. Check Homebrew installed
+	fmt.Print("Homebrew installed........... ")
+	cmd = exec.Command("brew", "--version")
+	if err := cmd.Run(); err != nil {
+		fmt.Println("✗ NOT INSTALLED")
+		allPassed = false
+	} else {
+		fmt.Println("✓")
+	}
+
+	// 11. Check data root present/writable
+	fmt.Print("Data root writable............ ")
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		fmt.Println("? (home dir error)")
+		allPassed = false
+	} else {
+		dataRoot := filepath.Join(homeDir, "Library", "Application Support", "tinyserve")
+		info, err := os.Stat(dataRoot)
+		if err != nil {
+			fmt.Println("✗ NOT FOUND")
+			allPassed = false
+		} else if !info.IsDir() {
+			fmt.Println("✗ NOT A DIRECTORY")
+			allPassed = false
+		} else {
+			tmp, err := os.CreateTemp(dataRoot, ".checkwrite-*")
+			if err != nil {
+				fmt.Println("✗ NOT WRITABLE")
+				allPassed = false
+			} else {
+				tmp.Close()
+				_ = os.Remove(tmp.Name())
+				fmt.Println("✓")
+			}
+		}
+	}
+
+	// 12. Check Cloudflare init status (if tinyserved is up)
+	fmt.Print("Cloudflare init status........ ")
+	if !statusOK {
+		fmt.Println("- (tinyserved down)")
+	} else {
+		hasToken, _ := statusPayload["has_cloudflare_token"].(bool)
+		_, hasTunnel := statusPayload["tunnel_config"].(map[string]any)
+		switch {
+		case hasToken && hasTunnel:
+			fmt.Println("✓")
+		case hasToken && !hasTunnel:
+			fmt.Println("⚠ token set, tunnel missing")
+		case !hasToken && hasTunnel:
+			fmt.Println("⚠ tunnel set, token missing")
+		default:
+			fmt.Println("⚠ NOT CONFIGURED")
+		}
 	}
 
 	fmt.Println(strings.Repeat("=", 40))
