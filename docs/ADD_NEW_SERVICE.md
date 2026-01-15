@@ -76,3 +76,105 @@ tinyserve service add --name api --image myapi:latest --port 8080
 tinyserve service add --name blog --image ghost:latest --port 2368 --hostname blog.example.com
 # → accessible at https://blog.example.com (custom domain)
 ```
+
+## Automated deployments with GitHub Actions
+
+Set up a webhook to automatically deploy when your CI builds and pushes a new image.
+
+### 1) Create a deploy token
+
+```bash
+# Token restricted to a specific service (recommended)
+tinyserve remote token create --name github-ci --service myapp
+
+# Or unrestricted token for all services
+tinyserve remote token create --name github-ci
+```
+
+Save the token - it won't be shown again.
+
+### 2) Add the token to GitHub secrets
+
+In your repo: **Settings → Secrets and variables → Actions → New repository secret**
+
+- Name: `TINYSERVE_DEPLOY_TOKEN`
+- Value: `ts_...` (the token from step 1)
+
+### 3) Add deploy step to your workflow
+
+```yaml
+# .github/workflows/deploy.yml
+name: Build and Deploy
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Build and push image
+        run: |
+          # Your build steps here
+          docker build -t ghcr.io/you/myapp:latest .
+          docker push ghcr.io/you/myapp:latest
+
+      - name: Deploy to tinyserve
+        run: |
+          curl -X POST "https://api.yourserver.com/webhook/deploy/myapp" \
+            -H "Authorization: Bearer ${{ secrets.TINYSERVE_DEPLOY_TOKEN }}" \
+            --fail-with-body
+```
+
+### 4) Webhook details
+
+**Endpoint:** `POST /webhook/deploy/{service-name}`
+
+**Headers:** `Authorization: Bearer ts_...`
+
+**Optional query params:**
+- `?timeout=120` - health check timeout in seconds (default: 60)
+
+**What it does:**
+1. Validates the token and checks service authorization
+2. Pulls the latest image from registry
+3. Recreates the container with the new image
+4. Waits for health check to pass
+5. Auto-rollback if health check fails
+
+**Example with timeout:**
+```bash
+curl -X POST "https://api.yourserver.com/webhook/deploy/myapp?timeout=120" \
+  -H "Authorization: Bearer ${{ secrets.TINYSERVE_DEPLOY_TOKEN }}"
+```
+
+### Tips
+
+- **Use mutable tags** like `:latest`, `:main`, or `:prod` for webhook deploys
+- **Add a healthcheck** to your service for reliable deployments with auto-rollback
+- **Restrict tokens** to specific services with `--service` for better security
+- **Check logs** if deploy fails: `tinyserve logs --service myapp --tail 100`
+
+## Editing a service
+
+To change service configuration (image tag, ports, env vars, etc.):
+
+```bash
+# Opens your $EDITOR with the service config as JSON
+tinyserve service edit --name myapp
+
+# Edit and deploy in one step
+tinyserve service edit --name myapp --deploy
+```
+
+Example: Change from fixed tag to `latest` for webhook deploys:
+```json
+{
+  "name": "myapp",
+  "image": "ghcr.io/you/myapp:latest",
+  ...
+}
+```
