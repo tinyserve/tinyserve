@@ -101,6 +101,8 @@ commands:
                [--mem MB] [--volume host:container] [--healthcheck "CMD ..."]
                [--cloudflare] [--deploy] [--timeout SEC]
   service list                 list all services
+  service edit --name NAME [--deploy] [--timeout SEC]
+                               open service config in $EDITOR
   service remove --name NAME   remove a service
   deploy [--service NAME]... [--timeout SEC]  pull, restart, and wait for health
   logs --service NAME [--tail N] [--follow]
@@ -291,7 +293,7 @@ func cmdInit(args []string) error {
 
 func cmdService(args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: tinyserve service <add|list|remove> ...")
+		return fmt.Errorf("usage: tinyserve service <add|list|remove|edit> ...")
 	}
 	switch args[0] {
 	case "add":
@@ -300,6 +302,8 @@ func cmdService(args []string) error {
 		return cmdServiceList()
 	case "remove":
 		return cmdServiceRemove(args[1:])
+	case "edit":
+		return cmdServiceEdit(args[1:])
 	default:
 		return fmt.Errorf("unknown service subcommand: %s", args[0])
 	}
@@ -442,6 +446,131 @@ func cmdServiceRemove(args []string) error {
 		return fmt.Errorf("remove service failed: %s (%s)", resp.Status, strings.TrimSpace(string(data)))
 	}
 	fmt.Printf("Service %q removed\n", name)
+	return nil
+}
+
+func cmdServiceEdit(args []string) error {
+	var name string
+	var deploy bool
+	var timeoutSec int = 60
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--name":
+			i++
+			if i >= len(args) {
+				return fmt.Errorf("--name requires a value")
+			}
+			name = args[i]
+		case "--deploy":
+			deploy = true
+		case "--timeout":
+			i++
+			if i >= len(args) {
+				return fmt.Errorf("--timeout requires a value")
+			}
+			t, err := strconv.Atoi(args[i])
+			if err != nil {
+				return fmt.Errorf("invalid timeout: %w", err)
+			}
+			timeoutSec = t
+		default:
+			return fmt.Errorf("unknown flag: %s", args[i])
+		}
+	}
+	if name == "" {
+		return fmt.Errorf("--name is required")
+	}
+
+	// Fetch current service config
+	resp, err := http.Get(apiBase() + "/services/" + url.PathEscape(name))
+	if err != nil {
+		return wrapConnError(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		data, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("get service failed: %s (%s)", resp.Status, strings.TrimSpace(string(data)))
+	}
+
+	var svc map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&svc); err != nil {
+		return fmt.Errorf("decode service: %w", err)
+	}
+
+	// Remove read-only fields from editor view
+	delete(svc, "id")
+	delete(svc, "last_deploy")
+	delete(svc, "status")
+
+	// Write to temp file
+	tmpFile, err := os.CreateTemp("", "tinyserve-*.json")
+	if err != nil {
+		return fmt.Errorf("create temp file: %w", err)
+	}
+	tmpPath := tmpFile.Name()
+	defer os.Remove(tmpPath)
+
+	enc := json.NewEncoder(tmpFile)
+	enc.SetIndent("", "  ")
+	if err := enc.Encode(svc); err != nil {
+		tmpFile.Close()
+		return fmt.Errorf("write temp file: %w", err)
+	}
+	tmpFile.Close()
+
+	// Get editor
+	editor := os.Getenv("EDITOR")
+	if editor == "" {
+		editor = "vim"
+	}
+
+	// Open editor
+	cmd := exec.Command(editor, tmpPath)
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("editor failed: %w", err)
+	}
+
+	// Read back edited config
+	editedData, err := os.ReadFile(tmpPath)
+	if err != nil {
+		return fmt.Errorf("read edited file: %w", err)
+	}
+
+	// Validate JSON
+	var edited map[string]any
+	if err := json.Unmarshal(editedData, &edited); err != nil {
+		return fmt.Errorf("invalid JSON after edit: %w", err)
+	}
+
+	// PUT updated service
+	req, err := http.NewRequest(http.MethodPut, apiBase()+"/services/"+url.PathEscape(name), bytes.NewReader(editedData))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		return wrapConnError(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		data, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("update service failed: %s (%s)", resp.Status, strings.TrimSpace(string(data)))
+	}
+
+	fmt.Printf("✓ Service %q updated\n", name)
+
+	if deploy {
+		fmt.Println("Deploying...")
+		if _, err := doDeploy([]string{name}, timeoutSec); err != nil {
+			return fmt.Errorf("deploy: %w", err)
+		}
+		fmt.Printf("✓ Service %q deployed\n", name)
+	}
+
 	return nil
 }
 

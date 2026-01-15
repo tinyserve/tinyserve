@@ -477,11 +477,84 @@ func (h *Handler) handleServiceByName(w http.ResponseWriter, r *http.Request) {
 	}
 
 	switch r.Method {
+	case http.MethodGet:
+		h.handleGetService(w, r, name)
+	case http.MethodPut:
+		h.handleUpdateService(w, r, name)
 	case http.MethodDelete:
 		h.handleDeleteService(w, r, name)
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
+}
+
+func (h *Handler) handleGetService(w http.ResponseWriter, r *http.Request, name string) {
+	ctx := r.Context()
+	st, err := h.Store.Load(ctx)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("load state: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	for _, svc := range st.Services {
+		if strings.EqualFold(svc.Name, name) {
+			writeJSON(w, svc)
+			return
+		}
+	}
+	http.Error(w, fmt.Sprintf("service %q not found", name), http.StatusNotFound)
+}
+
+func (h *Handler) handleUpdateService(w http.ResponseWriter, r *http.Request, name string) {
+	ctx := r.Context()
+	st, err := h.Store.Load(ctx)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("load state: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	serviceIdx := -1
+	for i, svc := range st.Services {
+		if strings.EqualFold(svc.Name, name) {
+			serviceIdx = i
+			break
+		}
+	}
+	if serviceIdx == -1 {
+		http.Error(w, fmt.Sprintf("service %q not found", name), http.StatusNotFound)
+		return
+	}
+
+	var updated state.Service
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&updated); err != nil {
+		http.Error(w, fmt.Sprintf("invalid JSON: %v", err), http.StatusBadRequest)
+		return
+	}
+
+	// Preserve immutable fields
+	updated.ID = st.Services[serviceIdx].ID
+	updated.LastDeploy = st.Services[serviceIdx].LastDeploy
+
+	// Validate required fields
+	if updated.Name == "" {
+		updated.Name = st.Services[serviceIdx].Name
+	}
+	if updated.Image == "" {
+		http.Error(w, "image is required", http.StatusBadRequest)
+		return
+	}
+	if updated.InternalPort == 0 {
+		http.Error(w, "internal_port is required", http.StatusBadRequest)
+		return
+	}
+
+	st.Services[serviceIdx] = updated
+	if err := h.Store.Save(ctx, st); err != nil {
+		http.Error(w, fmt.Sprintf("save state: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	writeJSON(w, updated)
 }
 
 func (h *Handler) handleDeleteService(w http.ResponseWriter, r *http.Request, name string) {
