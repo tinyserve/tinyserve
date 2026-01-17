@@ -995,7 +995,7 @@ func cmdChecklist() error {
 	}
 
 	// 8. Check sleep disabled (macOS)
-	fmt.Print("Sleep disabled............... ")
+	fmt.Print("Sleep disabled (never)....... ")
 	if runtime.GOOS == "darwin" {
 		cmd = exec.Command("pmset", "-g")
 		output, err := cmd.Output()
@@ -1039,7 +1039,55 @@ func cmdChecklist() error {
 		fmt.Println("- (macOS only)")
 	}
 
-	// 9. Check Xcode Command Line Tools (macOS)
+	// 9. Check auto-restart after updates disabled (macOS)
+	fmt.Print("Auto-restart after updates... ")
+	if runtime.GOOS == "darwin" {
+		cmd = exec.Command("defaults", "read", "/Library/Preferences/com.apple.SoftwareUpdate")
+		output, err := cmd.Output()
+		if err != nil {
+			fmt.Println("? (defaults error)")
+		} else {
+			isTruthy := func(value string) bool {
+				switch strings.ToLower(strings.TrimSpace(value)) {
+				case "1", "true", "yes":
+					return true
+				default:
+					return false
+				}
+			}
+			settings := map[string]string{}
+			scanner := bufio.NewScanner(bytes.NewReader(output))
+			for scanner.Scan() {
+				line := strings.TrimSpace(scanner.Text())
+				if line == "" || line == "{" || line == "}" {
+					continue
+				}
+				parts := strings.SplitN(line, "=", 2)
+				if len(parts) != 2 {
+					continue
+				}
+				key := strings.TrimSpace(parts[0])
+				value := strings.TrimSpace(strings.TrimSuffix(parts[1], ";"))
+				settings[key] = value
+			}
+
+			if val, ok := settings["AutoUpdateRestartRequired"]; ok && isTruthy(val) {
+				fmt.Println("⚠ enabled (restart required)")
+			} else if val, ok := settings["AutomaticallyInstallMacOSUpdates"]; ok {
+				if isTruthy(val) {
+					fmt.Println("⚠ enabled")
+				} else {
+					fmt.Println("✓")
+				}
+			} else {
+				fmt.Println("? (key missing)")
+			}
+		}
+	} else {
+		fmt.Println("- (macOS only)")
+	}
+
+	// 10. Check Xcode Command Line Tools (macOS)
 	fmt.Print("Xcode CLT installed.......... ")
 	if runtime.GOOS == "darwin" {
 		cmd = exec.Command("xcode-select", "-p")
@@ -1053,7 +1101,7 @@ func cmdChecklist() error {
 		fmt.Println("- (macOS only)")
 	}
 
-	// 10. Check Homebrew installed
+	// 11. Check Homebrew installed
 	fmt.Print("Homebrew installed........... ")
 	cmd = exec.Command("brew", "--version")
 	if err := cmd.Run(); err != nil {
@@ -1063,7 +1111,7 @@ func cmdChecklist() error {
 		fmt.Println("✓")
 	}
 
-	// 11. Check data root present/writable
+	// 12. Check data root present/writable
 	fmt.Print("Data root writable............ ")
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
@@ -1091,7 +1139,7 @@ func cmdChecklist() error {
 		}
 	}
 
-	// 12. Check Cloudflare init status (if tinyserved is up)
+	// 13. Check Cloudflare init status (if tinyserved is up)
 	fmt.Print("Cloudflare init status........ ")
 	if !statusOK {
 		fmt.Println("- (tinyserved down)")

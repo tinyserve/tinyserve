@@ -71,6 +71,12 @@ type DNSRecord struct {
 	Proxied bool   `json:"proxied"`
 }
 
+// PurgeCacheRequest represents a cache purge request.
+type PurgeCacheRequest struct {
+	PurgeEverything bool     `json:"purge_everything,omitempty"`
+	Files           []string `json:"files,omitempty"`
+}
+
 type apiResponse[T any] struct {
 	Success  bool       `json:"success"`
 	Errors   []apiError `json:"errors"`
@@ -316,6 +322,19 @@ func (c *Client) DeleteDNSRecord(ctx context.Context, zoneID, recordID string) e
 	var resp apiResponse[struct{}]
 	path := fmt.Sprintf("/zones/%s/dns_records/%s", zoneID, recordID)
 	if err := c.doRequest(ctx, "DELETE", path, nil, &resp); err != nil {
+		return err
+	}
+	if !resp.Success {
+		return fmt.Errorf("cloudflare: %v", resp.Errors)
+	}
+	return nil
+}
+
+// PurgeCache purges cache for a zone based on the request.
+func (c *Client) PurgeCache(ctx context.Context, zoneID string, req PurgeCacheRequest) error {
+	var resp apiResponse[map[string]any]
+	path := fmt.Sprintf("/zones/%s/purge_cache", zoneID)
+	if err := c.doRequest(ctx, "POST", path, req, &resp); err != nil {
 		return err
 	}
 	if !resp.Success {

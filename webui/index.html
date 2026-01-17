@@ -166,6 +166,41 @@
       font-size: 17px;
       letter-spacing: -0.01em;
     }
+    .service-actions {
+      margin-top: 10px;
+      padding-top: 10px;
+      border-top: 1px dashed var(--border);
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .action-row {
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 10px;
+    }
+    .btn-secondary {
+      background: rgba(15,23,42,0.6);
+      border-color: rgba(148,163,184,0.2);
+      color: #e2e8f0;
+      box-shadow: none;
+    }
+    .btn-secondary:active {
+      transform: translateY(1px);
+      box-shadow: none;
+    }
+    .action-note {
+      font-size: 12px;
+      color: var(--muted);
+      line-height: 1.4;
+    }
+    .action-status {
+      font-size: 12px;
+      color: var(--muted);
+    }
+    .action-status.ok { color: var(--success); }
+    .action-status.warn { color: #fca5a5; }
     .pill-row { display: flex; gap: 8px; flex-wrap: wrap; }
     .inline-muted { color: var(--muted); font-size: 13px; }
     .empty {
@@ -372,13 +407,24 @@
     let currentTail = 200;
     let currentLogSource = "ui";
 
-    async function fetchJSON(path) {
-      const res = await fetch(path, { cache: "no-store" });
+    async function fetchJSON(path, options = {}) {
+      const opts = options || {};
+      const headers = { ...(opts.headers || {}) };
+      if (opts.body && !headers["Content-Type"]) {
+        headers["Content-Type"] = "application/json";
+      }
+      const res = await fetch(path, { cache: "no-store", ...opts, headers });
       if (!res.ok) {
         const text = await res.text();
         throw new Error(text || res.statusText);
       }
-      return res.json();
+      const text = await res.text();
+      if (!text) return {};
+      try {
+        return JSON.parse(text);
+      } catch (err) {
+        return text;
+      }
     }
 
     function renderStatus(data) {
@@ -422,6 +468,82 @@
       const isLocal = lower === "localhost" || lower.endsWith(".local") || /^[0-9.]+$/.test(lower);
       const scheme = isLocal ? "http" : "https";
       return `${scheme}://${host}`;
+    }
+
+    function buildPurgeSection(service) {
+      if (!service || !service.cloudflare) return null;
+
+      const actions = document.createElement("div");
+      actions.className = "service-actions";
+
+      const row = document.createElement("div");
+      row.className = "action-row";
+
+      const purgeBtn = document.createElement("button");
+      purgeBtn.type = "button";
+      purgeBtn.className = "btn-secondary";
+      purgeBtn.textContent = "Purge Cache";
+
+      const statusEl = document.createElement("div");
+      statusEl.className = "action-status";
+
+      purgeBtn.addEventListener("click", () => purgeCache(service, statusEl, purgeBtn));
+
+      row.appendChild(purgeBtn);
+      actions.appendChild(row);
+
+      const note = document.createElement("div");
+      note.className = "action-note";
+      note.textContent =
+        "Instantly purge cached files to force Cloudflare to fetch a fresh version of those files from your web server. You can purge files selectively or all at once. Note: purging may temporarily degrade performance and increase load on your origin.";
+      actions.appendChild(note);
+      actions.appendChild(statusEl);
+
+      return actions;
+    }
+
+    async function purgeCache(service, statusEl, buttonEl) {
+      const promptText =
+        `Purge Cloudflare cache for ${service.name}?\n` +
+        "Enter paths or URLs to purge (comma-separated). Leave blank to purge everything.\n" +
+        "Note: purging may temporarily degrade performance and increase load on your origin.";
+
+      const input = window.prompt(promptText, "");
+      if (input === null) return;
+
+      const payload = {};
+      const trimmed = input.trim();
+      if (trimmed) {
+        const files = trimmed
+          .split(",")
+          .map((value) => value.trim())
+          .filter(Boolean);
+        if (files.length === 0) {
+          statusEl.textContent = "No files provided.";
+          statusEl.className = "action-status warn";
+          return;
+        }
+        payload.files = files;
+      } else {
+        payload.purge_everything = true;
+      }
+
+      statusEl.className = "action-status";
+      statusEl.textContent = "Purging cache...";
+      buttonEl.disabled = true;
+      try {
+        await fetchJSON(`/services/${encodeURIComponent(service.name)}/purge-cache`, {
+          method: "POST",
+          body: JSON.stringify(payload),
+        });
+        statusEl.className = "action-status ok";
+        statusEl.textContent = "Cache purged.";
+      } catch (err) {
+        statusEl.className = "action-status warn";
+        statusEl.textContent = `Purge failed: ${err.message}`;
+      } finally {
+        buttonEl.disabled = false;
+      }
     }
 
     // Safely escape HTML to prevent XSS
@@ -510,6 +632,11 @@
         serviceEl.appendChild(portDiv);
         serviceEl.appendChild(uptimeDiv);
         serviceEl.appendChild(hostsDiv);
+
+        const actions = buildPurgeSection(svc);
+        if (actions) {
+          serviceEl.appendChild(actions);
+        }
 
         servicesContainer.appendChild(serviceEl);
       }

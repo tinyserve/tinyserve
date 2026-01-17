@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -100,6 +101,11 @@ func (h *Handler) handleServicesWithAuth(authMw *AuthMiddleware) http.HandlerFun
 	}
 }
 
+type serviceResponse struct {
+	state.Service
+	Cloudflare bool `json:"cloudflare,omitempty"`
+}
+
 func (h *Handler) handleStatus(w http.ResponseWriter, r *http.Request) {
 	setNoCache(w)
 	st, err := h.Store.Load(r.Context())
@@ -147,7 +153,7 @@ func (h *Handler) handleServices(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		statusMap, _ := h.containerStatus(r.Context())
-		services := make([]state.Service, 0, len(st.Services))
+		services := make([]serviceResponse, 0, len(st.Services))
 		for _, svc := range st.Services {
 			c := svc
 			if cs, ok := statusMap[sanitizeName(svc.Name)]; ok {
@@ -158,7 +164,10 @@ func (h *Handler) handleServices(w http.ResponseWriter, r *http.Request) {
 			} else if c.Status == "" {
 				c.Status = "unknown"
 			}
-			services = append(services, c)
+			services = append(services, serviceResponse{
+				Service:    c,
+				Cloudflare: serviceCloudflareEnabled(st, c),
+			})
 		}
 		writeJSON(w, services)
 	case http.MethodPost:
@@ -183,6 +192,10 @@ func (h *Handler) HandleStatus(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) HandleServicesReadOnly(w http.ResponseWriter, r *http.Request) {
 	h.handleServicesReadOnly(w, r)
+}
+
+func (h *Handler) HandleServiceActions(w http.ResponseWriter, r *http.Request) {
+	h.handleServiceActionReadOnly(w, r)
 }
 
 func (h *Handler) HandleMe(w http.ResponseWriter, r *http.Request) {
@@ -282,6 +295,11 @@ type addServiceRequest struct {
 	Resources    state.ServiceResources    `json:"resources"`
 	Enabled      *bool                     `json:"enabled,omitempty"`
 	Cloudflare   bool                      `json:"cloudflare,omitempty"` // If true, setup DNS for auto-generated hostname
+}
+
+type purgeCacheRequest struct {
+	PurgeEverything bool     `json:"purge_everything,omitempty"`
+	Files           []string `json:"files,omitempty"`
 }
 
 func (h *Handler) handleAddService(w http.ResponseWriter, r *http.Request) {
@@ -475,10 +493,27 @@ func (h *Handler) handleAddService(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) handleServiceByName(w http.ResponseWriter, r *http.Request) {
 	// Extract service name from path: /services/{name}
-	name := strings.TrimPrefix(r.URL.Path, "/services/")
+	raw := strings.TrimPrefix(r.URL.Path, "/services/")
+	if raw == "" {
+		http.Error(w, "service name required", http.StatusBadRequest)
+		return
+	}
+
+	parts := strings.SplitN(raw, "/", 2)
+	name := parts[0]
 	if name == "" {
 		http.Error(w, "service name required", http.StatusBadRequest)
 		return
+	}
+	if len(parts) > 1 {
+		switch parts[1] {
+		case "purge-cache":
+			h.handlePurgeCache(w, r, name)
+			return
+		default:
+			http.Error(w, "unknown service action", http.StatusNotFound)
+			return
+		}
 	}
 
 	switch r.Method {
@@ -491,6 +526,25 @@ func (h *Handler) handleServiceByName(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
+}
+
+func (h *Handler) handleServiceActionReadOnly(w http.ResponseWriter, r *http.Request) {
+	raw := strings.TrimPrefix(r.URL.Path, "/services/")
+	if raw == "" {
+		http.Error(w, "service name required", http.StatusBadRequest)
+		return
+	}
+
+	parts := strings.SplitN(raw, "/", 2)
+	if len(parts) != 2 || parts[0] == "" {
+		http.Error(w, "invalid service action", http.StatusNotFound)
+		return
+	}
+	if parts[1] != "purge-cache" {
+		http.Error(w, "unknown service action", http.StatusNotFound)
+		return
+	}
+	h.handlePurgeCache(w, r, parts[0])
 }
 
 func (h *Handler) handleGetService(w http.ResponseWriter, r *http.Request, name string) {
@@ -560,6 +614,71 @@ func (h *Handler) handleUpdateService(w http.ResponseWriter, r *http.Request, na
 	}
 
 	writeJSON(w, updated)
+}
+
+func (h *Handler) handlePurgeCache(w http.ResponseWriter, r *http.Request, name string) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	ctx := r.Context()
+	st, err := h.Store.Load(ctx)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("load state: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	var svc *state.Service
+	for i := range st.Services {
+		if strings.EqualFold(st.Services[i].Name, name) {
+			svc = &st.Services[i]
+			break
+		}
+	}
+	if svc == nil {
+		http.Error(w, fmt.Sprintf("service %q not found", name), http.StatusNotFound)
+		return
+	}
+	if st.Settings.CloudflareAPIToken == "" {
+		http.Error(w, "cloudflare api token not configured", http.StatusBadRequest)
+		return
+	}
+
+	hostnames := filterCloudflareHostnames(svc.Hostnames)
+	if len(hostnames) == 0 {
+		http.Error(w, "service has no cloudflare hostnames", http.StatusBadRequest)
+		return
+	}
+
+	var req purgeCacheRequest
+	if r.Body != nil {
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<16)).Decode(&req); err != nil && err != io.EOF {
+			http.Error(w, fmt.Sprintf("invalid JSON: %v", err), http.StatusBadRequest)
+			return
+		}
+	}
+	if req.PurgeEverything && len(req.Files) > 0 {
+		http.Error(w, "purge_everything and files are mutually exclusive", http.StatusBadRequest)
+		return
+	}
+	if !req.PurgeEverything && len(req.Files) == 0 {
+		http.Error(w, "provide files or set purge_everything", http.StatusBadRequest)
+		return
+	}
+
+	cfClient := cloudflare.NewClient(st.Settings.CloudflareAPIToken)
+	if err := purgeCacheForHostnames(ctx, cfClient, hostnames, req); err != nil {
+		http.Error(w, fmt.Sprintf("purge cache: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	writeJSON(w, map[string]any{
+		"status":    "purged",
+		"service":   svc.Name,
+		"files":     req.Files,
+		"hostnames": hostnames,
+	})
 }
 
 func (h *Handler) handleDeleteService(w http.ResponseWriter, r *http.Request, name string) {
@@ -711,6 +830,8 @@ func (h *Handler) handleDeploy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	cachePurge := purgeCacheForServices(ctx, st, selectDeployServices(st, req))
+
 	// Prune old backups
 	maxBackups := st.Settings.MaxBackups
 	if maxBackups == 0 {
@@ -721,6 +842,9 @@ func (h *Handler) handleDeploy(w http.ResponseWriter, r *http.Request) {
 	resp := map[string]any{
 		"status": "deployed",
 		"time":   now.Format(time.RFC3339),
+	}
+	if cachePurge != nil {
+		resp["cache_purge"] = cachePurge
 	}
 	if pullOutput != "" {
 		resp["pull_output"] = pullOutput
@@ -1289,6 +1413,237 @@ func summarizePullOutput(out string) string {
 	default:
 		return "unknown"
 	}
+}
+
+func purgeCacheForHostnames(ctx context.Context, cfClient *cloudflare.Client, hostnames []string, req purgeCacheRequest) error {
+	zoneByHost := make(map[string]string, len(hostnames))
+	for _, hostname := range hostnames {
+		zoneID, err := cfClient.GetZoneID(ctx, hostname)
+		if err != nil {
+			return fmt.Errorf("get zone ID for %s: %w", hostname, err)
+		}
+		zoneByHost[strings.ToLower(hostname)] = zoneID
+	}
+
+	if req.PurgeEverything {
+		seenZones := make(map[string]struct{})
+		for _, zoneID := range zoneByHost {
+			if _, ok := seenZones[zoneID]; ok {
+				continue
+			}
+			seenZones[zoneID] = struct{}{}
+			if err := cfClient.PurgeCache(ctx, zoneID, cloudflare.PurgeCacheRequest{PurgeEverything: true}); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	filesByZone, err := expandPurgeFiles(req.Files, hostnames, zoneByHost)
+	if err != nil {
+		return err
+	}
+	if len(filesByZone) == 0 {
+		return fmt.Errorf("no files to purge")
+	}
+
+	for zoneID, files := range filesByZone {
+		if err := cfClient.PurgeCache(ctx, zoneID, cloudflare.PurgeCacheRequest{Files: files}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func purgeCacheForServices(ctx context.Context, st state.State, services []state.Service) map[string]any {
+	if st.Settings.CloudflareAPIToken == "" {
+		return map[string]any{
+			"status": "skipped",
+			"reason": "cloudflare api token not configured",
+		}
+	}
+
+	seenHostnames := make(map[string]struct{})
+	seenServices := make(map[string]struct{})
+	for _, svc := range services {
+		hostnames := filterCloudflareHostnames(svc.Hostnames)
+		if len(hostnames) == 0 {
+			continue
+		}
+		seenServices[svc.Name] = struct{}{}
+		for _, host := range hostnames {
+			seenHostnames[host] = struct{}{}
+		}
+	}
+
+	if len(seenHostnames) == 0 {
+		return map[string]any{
+			"status": "skipped",
+			"reason": "no cloudflare hostnames",
+		}
+	}
+
+	hostnames := make([]string, 0, len(seenHostnames))
+	for host := range seenHostnames {
+		hostnames = append(hostnames, host)
+	}
+	sort.Strings(hostnames)
+
+	serviceNames := make([]string, 0, len(seenServices))
+	for name := range seenServices {
+		serviceNames = append(serviceNames, name)
+	}
+	sort.Strings(serviceNames)
+
+	cfClient := cloudflare.NewClient(st.Settings.CloudflareAPIToken)
+	err := purgeCacheForHostnames(ctx, cfClient, hostnames, purgeCacheRequest{PurgeEverything: true})
+	if err != nil {
+		return map[string]any{
+			"status":    "failed",
+			"error":     err.Error(),
+			"services":  serviceNames,
+			"hostnames": hostnames,
+		}
+	}
+
+	return map[string]any{
+		"status":           "purged",
+		"purge_everything": true,
+		"services":         serviceNames,
+		"hostnames":        hostnames,
+	}
+}
+
+func selectDeployServices(st state.State, req deployRequest) []state.Service {
+	if len(req.Services) == 0 && req.Service == "" {
+		return st.Services
+	}
+
+	var selected []state.Service
+	match := func(target string) {
+		for _, svc := range st.Services {
+			if strings.EqualFold(svc.Name, target) {
+				selected = append(selected, svc)
+				return
+			}
+		}
+	}
+
+	if len(req.Services) > 0 {
+		for _, name := range req.Services {
+			if name == "" {
+				continue
+			}
+			match(name)
+		}
+		return selected
+	}
+
+	match(req.Service)
+	return selected
+}
+
+func serviceCloudflareEnabled(st state.State, svc state.Service) bool {
+	if st.Settings.CloudflareAPIToken == "" {
+		return false
+	}
+	return len(filterCloudflareHostnames(svc.Hostnames)) > 0
+}
+
+func filterCloudflareHostnames(hostnames []string) []string {
+	filtered := make([]string, 0, len(hostnames))
+	for _, host := range hostnames {
+		trimmed := strings.TrimSpace(host)
+		if trimmed == "" || isLocalHostname(trimmed) {
+			continue
+		}
+		filtered = append(filtered, trimmed)
+	}
+	return filtered
+}
+
+func isLocalHostname(host string) bool {
+	lower := strings.ToLower(strings.TrimSpace(host))
+	if lower == "" {
+		return true
+	}
+	if lower == "localhost" || strings.HasSuffix(lower, ".local") {
+		return true
+	}
+	return net.ParseIP(lower) != nil
+}
+
+func expandPurgeFiles(files []string, hostnames []string, zoneByHost map[string]string) (map[string][]string, error) {
+	hostSet := make(map[string]struct{}, len(hostnames))
+	for _, host := range hostnames {
+		hostSet[strings.ToLower(host)] = struct{}{}
+	}
+
+	filesByZone := make(map[string]map[string]struct{})
+	addURL := func(zoneID, urlStr string) {
+		if filesByZone[zoneID] == nil {
+			filesByZone[zoneID] = make(map[string]struct{})
+		}
+		filesByZone[zoneID][urlStr] = struct{}{}
+	}
+
+	for _, entry := range files {
+		trimmed := strings.TrimSpace(entry)
+		if trimmed == "" {
+			continue
+		}
+
+		if strings.HasPrefix(trimmed, "http://") || strings.HasPrefix(trimmed, "https://") {
+			u, err := url.Parse(trimmed)
+			if err != nil {
+				return nil, fmt.Errorf("invalid url %q", trimmed)
+			}
+			if u.Scheme != "http" && u.Scheme != "https" {
+				return nil, fmt.Errorf("unsupported url scheme: %s", u.Scheme)
+			}
+			host := strings.ToLower(u.Hostname())
+			if host == "" {
+				return nil, fmt.Errorf("invalid url host: %q", trimmed)
+			}
+			if _, ok := hostSet[host]; !ok {
+				return nil, fmt.Errorf("url host %q is not a service hostname", host)
+			}
+			zoneID := zoneByHost[host]
+			addURL(zoneID, normalizePurgeURL(u))
+			continue
+		}
+
+		path := trimmed
+		if !strings.HasPrefix(path, "/") {
+			path = "/" + path
+		}
+		for _, host := range hostnames {
+			zoneID := zoneByHost[strings.ToLower(host)]
+			addURL(zoneID, fmt.Sprintf("https://%s%s", host, path))
+		}
+	}
+
+	result := make(map[string][]string, len(filesByZone))
+	for zoneID, urlSet := range filesByZone {
+		urls := make([]string, 0, len(urlSet))
+		for urlStr := range urlSet {
+			urls = append(urls, urlStr)
+		}
+		sort.Strings(urls)
+		result[zoneID] = urls
+	}
+	return result, nil
+}
+
+func normalizePurgeURL(u *url.URL) string {
+	path := u.EscapedPath()
+	if path == "" {
+		path = "/"
+	}
+	if u.RawQuery != "" {
+		path = path + "?" + u.RawQuery
+	}
+	return fmt.Sprintf("%s://%s%s", u.Scheme, u.Hostname(), path)
 }
 
 func sanitizeName(name string) string {

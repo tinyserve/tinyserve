@@ -77,6 +77,7 @@ func run() error {
 	uiMux := http.NewServeMux()
 	uiMux.Handle("/status", browserAuth.Wrap(http.HandlerFunc(handler.HandleStatus)))
 	uiMux.Handle("/services", browserAuth.Wrap(http.HandlerFunc(handler.HandleServicesReadOnly)))
+	uiMux.Handle("/services/", browserAuth.Wrap(http.HandlerFunc(handler.HandleServiceActions)))
 	uiMux.Handle("/me", browserAuth.Wrap(http.HandlerFunc(handler.HandleMe)))
 	uiMux.Handle("/logs", browserAuth.Wrap(http.HandlerFunc(handler.HandleLogsReadOnly)))
 	uiMux.Handle("/", browserAuth.Wrap(webui.Handler()))
