@@ -9,6 +9,7 @@ import (
 	"io"
 	"log"
 	"os/exec"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -293,6 +294,36 @@ func InspectImagePort(ctx context.Context, image string) (int, error) {
 	}
 
 	return 0, nil
+}
+
+// InspectImageVolumes inspects a Docker image and returns declared volume mountpoints.
+// Returns empty slice if no volumes are declared. The image must be available locally.
+func InspectImageVolumes(ctx context.Context, image string) ([]string, error) {
+	cmd := exec.CommandContext(ctx, "docker", "image", "inspect", image, "--format", "{{json .Config.Volumes}}")
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = &out
+
+	if err := cmd.Run(); err != nil {
+		return nil, fmt.Errorf("inspect image %s: %w", image, err)
+	}
+
+	output := strings.TrimSpace(out.String())
+	if output == "" || output == "null" || output == "{}" {
+		return nil, nil
+	}
+
+	var volumes map[string]any
+	if err := json.Unmarshal([]byte(output), &volumes); err != nil {
+		return nil, fmt.Errorf("parse volumes: %w", err)
+	}
+
+	paths := make([]string, 0, len(volumes))
+	for path := range volumes {
+		paths = append(paths, path)
+	}
+	sort.Strings(paths)
+	return paths, nil
 }
 
 // PullImage pulls a Docker image.

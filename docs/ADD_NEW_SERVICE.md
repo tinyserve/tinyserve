@@ -13,6 +13,9 @@ This assumes tinyserve is installed, the daemon is running on `127.0.0.1:7070`, 
   - Env: `DATABASE_URL=...`
   - Volumes: `/Users/you/data/myapp:/data`
   - Healthcheck: `CMD curl -f http://localhost:8080/healthz`
+  - If the image declares Dockerfile `VOLUME` paths and you don't pass `--volume`,
+    tinyserve will auto-mount them under `~/Library/Application Support/tinyserve/services/<service>/...`
+    (disable with `--no-auto-volumes`).
 
 ## 2) Register the service
 - CLI (ideal target flow):

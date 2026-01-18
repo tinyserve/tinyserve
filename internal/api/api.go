@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -295,6 +296,7 @@ type addServiceRequest struct {
 	Resources    state.ServiceResources    `json:"resources"`
 	Enabled      *bool                     `json:"enabled,omitempty"`
 	Cloudflare   bool                      `json:"cloudflare,omitempty"` // If true, setup DNS for auto-generated hostname
+	AutoVolumes  bool                      `json:"auto_volumes,omitempty"`
 }
 
 type purgeCacheRequest struct {
@@ -352,26 +354,45 @@ func (h *Handler) handleAddService(w http.ResponseWriter, r *http.Request) {
 		log.Printf("add service: auto-generated hostname %q", autoHostname)
 	}
 
-	// Auto-detect port from image if not specified
-	if svc.InternalPort == 0 {
+	// Auto-detect port and volumes from image when requested
+	needPort := svc.InternalPort == 0
+	needAutoVolumes := payload.AutoVolumes && len(svc.Volumes) == 0
+	if needPort || needAutoVolumes {
 		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Minute)
 		defer cancel()
 
 		// Pull image first to ensure it's available locally
 		if err := docker.PullImage(ctx, svc.Image); err != nil {
-			http.Error(w, fmt.Sprintf("failed to pull image for port detection: %v", err), http.StatusBadRequest)
-			return
-		}
+			if needPort {
+				http.Error(w, fmt.Sprintf("failed to pull image for port detection: %v", err), http.StatusBadRequest)
+				return
+			}
+			log.Printf("add service: auto volume detection skipped (pull failed): %v", err)
+		} else {
+			if needPort {
+				port, err := docker.InspectImagePort(ctx, svc.Image)
+				if err != nil {
+					http.Error(w, fmt.Sprintf("failed to detect port from image: %v", err), http.StatusBadRequest)
+					return
+				}
+				if port == 0 {
+					port = 80 // Default to 80 if no EXPOSE directive found
+				}
+				svc.InternalPort = port
+			}
 
-		port, err := docker.InspectImagePort(ctx, svc.Image)
-		if err != nil {
-			http.Error(w, fmt.Sprintf("failed to detect port from image: %v", err), http.StatusBadRequest)
-			return
+			if needAutoVolumes {
+				volumePaths, err := docker.InspectImageVolumes(ctx, svc.Image)
+				if err != nil {
+					log.Printf("add service: auto volume detection failed: %v", err)
+				} else {
+					autoVolumes := h.autoVolumesForService(svc.Name, volumePaths)
+					if len(autoVolumes) > 0 {
+						svc.Volumes = autoVolumes
+					}
+				}
+			}
 		}
-		if port == 0 {
-			port = 80 // Default to 80 if no EXPOSE directive found
-		}
-		svc.InternalPort = port
 	}
 
 	// Validate service name
@@ -1650,6 +1671,63 @@ func sanitizeName(name string) string {
 	name = strings.ToLower(strings.TrimSpace(name))
 	name = strings.ReplaceAll(name, " ", "-")
 	return name
+}
+
+func (h *Handler) dataRoot() string {
+	if h.StatePath != "" {
+		return filepath.Dir(h.StatePath)
+	}
+	if h.GeneratedRoot != "" {
+		return filepath.Dir(h.GeneratedRoot)
+	}
+	return ""
+}
+
+func (h *Handler) autoVolumesForService(serviceName string, volumePaths []string) []string {
+	dataRoot := h.dataRoot()
+	if dataRoot == "" {
+		log.Printf("add service: unable to resolve data root for auto volumes")
+		return nil
+	}
+
+	seen := make(map[string]struct{})
+	auto := make([]string, 0, len(volumePaths))
+	for _, containerPath := range volumePaths {
+		hostPath, cleanContainer, ok := deriveVolumeMount(dataRoot, serviceName, containerPath)
+		if !ok {
+			continue
+		}
+		if err := os.MkdirAll(hostPath, 0o700); err != nil {
+			log.Printf("add service: create volume dir %s: %v", hostPath, err)
+			continue
+		}
+		mount := hostPath + ":" + cleanContainer
+		if _, exists := seen[mount]; exists {
+			continue
+		}
+		seen[mount] = struct{}{}
+		auto = append(auto, mount)
+	}
+	sort.Strings(auto)
+	return auto
+}
+
+func deriveVolumeMount(dataRoot, serviceName, containerPath string) (string, string, bool) {
+	clean := path.Clean(containerPath)
+	if clean == "." || clean == "/" || !strings.HasPrefix(clean, "/") {
+		return "", "", false
+	}
+	trimmed := strings.TrimPrefix(clean, "/")
+	if trimmed == "" {
+		return "", "", false
+	}
+	for _, part := range strings.Split(trimmed, "/") {
+		if part == ".." {
+			return "", "", false
+		}
+	}
+	hostPath := filepath.Join(dataRoot, "services", serviceName, filepath.FromSlash(trimmed))
+	return hostPath, clean, true
 }
 
 // nameFromImage extracts a service name from a Docker image reference.

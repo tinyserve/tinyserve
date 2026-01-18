@@ -100,6 +100,7 @@ commands:
        [--cloudflare-api-token T] [--default-domain D] [--tunnel-name N] [--account-id ID] [--skip-cloudflare]
   service add --image [--name N] [--port P] [--hostname h] [--env K=V] [--env-file .env]
                [--mem MB] [--volume host:container] [--healthcheck "CMD ..."]
+               [--auto-volumes | --no-auto-volumes]
                [--cloudflare] [--deploy] [--timeout SEC]
   service list                 list all services
   service edit --name NAME [--deploy] [--timeout SEC]
@@ -322,6 +323,7 @@ func cmdServiceAdd(args []string) error {
 		"hostnames":     opts.Hostnames,
 		"env":           opts.Env,
 		"volumes":       opts.Volumes,
+		"auto_volumes":  opts.AutoVolumes,
 		"resources": map[string]any{
 			"memory_limit_mb": opts.Memory,
 		},
@@ -582,6 +584,7 @@ type addOptions struct {
 	Hostnames   []string
 	Env         map[string]string
 	Volumes     []string
+	AutoVolumes bool
 	Healthcheck string
 	Memory      int
 	Cloudflare  bool
@@ -591,8 +594,9 @@ type addOptions struct {
 
 func parseServiceAdd(args []string) (addOptions, error) {
 	opts := addOptions{
-		Env:    map[string]string{},
-		Memory: 256,
+		Env:         map[string]string{},
+		Memory:      256,
+		AutoVolumes: true,
 	}
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
@@ -662,6 +666,10 @@ func parseServiceAdd(args []string) (addOptions, error) {
 				return opts, fmt.Errorf("--volume requires host:container path")
 			}
 			opts.Volumes = append(opts.Volumes, args[i])
+		case "--auto-volumes":
+			opts.AutoVolumes = true
+		case "--no-auto-volumes":
+			opts.AutoVolumes = false
 		case "--healthcheck":
 			i++
 			if i >= len(args) {
