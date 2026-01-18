@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"io/fs"
 	"log"
 	"net"
 	"net/http"
@@ -104,7 +105,8 @@ func (h *Handler) handleServicesWithAuth(authMw *AuthMiddleware) http.HandlerFun
 
 type serviceResponse struct {
 	state.Service
-	Cloudflare bool `json:"cloudflare,omitempty"`
+	Cloudflare bool   `json:"cloudflare,omitempty"`
+	DataBytes  *int64 `json:"data_bytes,omitempty"`
 }
 
 func (h *Handler) handleStatus(w http.ResponseWriter, r *http.Request) {
@@ -154,6 +156,18 @@ func (h *Handler) handleServices(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		statusMap, _ := h.containerStatus(r.Context())
+		withData := parseBoolQuery(r.URL.Query().Get("data"))
+		if withData && len(st.Services) > 10 {
+			withData = false
+		}
+		dataRoot := ""
+		if withData {
+			dataRoot = h.dataRoot()
+			if dataRoot == "" {
+				log.Printf("services: data root unavailable; skipping data usage")
+				withData = false
+			}
+		}
 		services := make([]serviceResponse, 0, len(st.Services))
 		for _, svc := range st.Services {
 			c := svc
@@ -165,9 +179,19 @@ func (h *Handler) handleServices(w http.ResponseWriter, r *http.Request) {
 			} else if c.Status == "" {
 				c.Status = "unknown"
 			}
+			var dataBytes *int64
+			if withData {
+				root := filepath.Join(dataRoot, "services", c.Name)
+				if bytes, err := dirSizeBytes(root); err != nil {
+					log.Printf("services: data usage for %s: %v", c.Name, err)
+				} else {
+					dataBytes = &bytes
+				}
+			}
 			services = append(services, serviceResponse{
 				Service:    c,
 				Cloudflare: serviceCloudflareEnabled(st, c),
+				DataBytes:  dataBytes,
 			})
 		}
 		writeJSON(w, services)
@@ -1728,6 +1752,51 @@ func deriveVolumeMount(dataRoot, serviceName, containerPath string) (string, str
 	}
 	hostPath := filepath.Join(dataRoot, "services", serviceName, filepath.FromSlash(trimmed))
 	return hostPath, clean, true
+}
+
+func parseBoolQuery(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
+	}
+}
+
+func dirSizeBytes(root string) (int64, error) {
+	info, err := os.Stat(root)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return 0, nil
+		}
+		return 0, err
+	}
+	if !info.IsDir() {
+		return info.Size(), nil
+	}
+
+	var total int64
+	err = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.Type()&os.ModeSymlink != 0 {
+			return nil
+		}
+		if d.IsDir() {
+			return nil
+		}
+		entryInfo, err := d.Info()
+		if err != nil {
+			return err
+		}
+		total += entryInfo.Size()
+		return nil
+	})
+	if err != nil {
+		return 0, err
+	}
+	return total, nil
 }
 
 // nameFromImage extracts a service name from a Docker image reference.

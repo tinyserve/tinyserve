@@ -601,6 +601,10 @@
         uptimeDiv.className = "inline-muted";
         uptimeDiv.textContent = "Uptime: " + (svc.uptime_seconds != null ? formatUptime(svc.uptime_seconds) : "—");
 
+        const dataDiv = document.createElement("div");
+        dataDiv.className = "inline-muted";
+        dataDiv.textContent = "Data: " + (svc.data_bytes != null ? formatBytes(svc.data_bytes) : "—");
+
         const hostsDiv = document.createElement("div");
         hostsDiv.className = "inline-muted";
         hostsDiv.appendChild(document.createTextNode("Hosts: "));
@@ -631,6 +635,7 @@
         serviceEl.appendChild(imageDiv);
         serviceEl.appendChild(portDiv);
         serviceEl.appendChild(uptimeDiv);
+        serviceEl.appendChild(dataDiv);
         serviceEl.appendChild(hostsDiv);
 
         const actions = buildPurgeSection(svc);
@@ -734,7 +739,7 @@
       }
 
       try {
-        const services = await fetchJSON("/services");
+        const services = await fetchJSON("/services?data=1");
         renderServices(services);
         renderLogTags(services);
         if (currentLogSource) {
