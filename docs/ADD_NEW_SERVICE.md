@@ -194,3 +194,29 @@ Example: Change from fixed tag to `latest` for webhook deploys:
   ...
 }
 ```
+
+## Full config example
+
+```json
+{
+  "enabled": true,
+  "env": {
+    "DATABASE_URL": "postgres://weirdstats:weirdstats@db/weirdstats",
+    "LOG_LEVEL": "info",
+    "STATSD_NAMESPACE": "weirdstats"
+  },
+  "hostnames": [
+    "weirdstats.com"
+  ],
+  "image": "ghcr.io/ptmt/weirdstats:latest",
+  "internal_port": 8080,
+  "name": "weirdstats",
+  "resources": {
+    "memory_limit_mb": 256
+  },
+  "type": "registry-image",
+  "volumes": [
+    "/Users/tinyserve/Library/Application Support/tinyserve/services/weirdstats/data:/data"
+  ]
+}
+```
