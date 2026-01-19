@@ -139,13 +139,13 @@
       color: inherit;
       text-decoration: none;
     }
-    .badge.link-badge {
-      border-color: rgba(59,130,246,0.5);
-      color: #93c5fd;
-      background: rgba(59,130,246,0.12);
+    .host-link {
+      color: var(--muted);
+      text-decoration: none;
     }
-    .badge.link-badge:hover {
-      background: rgba(59,130,246,0.22);
+    .host-link:hover {
+      color: #93c5fd;
+      text-decoration: underline;
     }
     .badge.ok { color: var(--success); border-color: rgba(34,197,94,0.5); }
     .badge.warn { color: var(--warning); border-color: rgba(245,158,11,0.5); }
@@ -431,7 +431,14 @@
       statusText.textContent = data.status || "unknown";
       statusText.className = data.status === "ok" ? "metric ok" : "metric warn";
       serviceCount.textContent = data.service_count ?? 0;
-      updatedAt.textContent = data.updated_at ? new Date(data.updated_at).toLocaleString() : "—";
+      if (data.updated_at) {
+        const updatedDate = new Date(data.updated_at);
+        updatedAt.textContent = formatRelativeTime(updatedDate);
+        updatedAt.title = updatedDate.toLocaleString();
+      } else {
+        updatedAt.textContent = "—";
+        updatedAt.title = "";
+      }
       const proxy = data.proxy || {};
       proxyStatus.textContent = proxy.state || "unknown";
       proxyStatus.className = isHealthy(proxy) ? "metric ok" : "metric warn";
@@ -460,6 +467,27 @@
       if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + " KB";
       if (bytes < 1024 * 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(1) + " MB";
       return (bytes / (1024 * 1024 * 1024)).toFixed(1) + " GB";
+    }
+
+    function formatRelativeTime(date) {
+      const now = Date.now();
+      const diffMs = date.getTime() - now;
+      const diffSec = Math.round(diffMs / 1000);
+      const absSec = Math.abs(diffSec);
+      const units = [
+        { limit: 60, value: 1, name: "second" },
+        { limit: 60 * 60, value: 60, name: "minute" },
+        { limit: 60 * 60 * 24, value: 60 * 60, name: "hour" },
+        { limit: 60 * 60 * 24 * 7, value: 60 * 60 * 24, name: "day" },
+        { limit: 60 * 60 * 24 * 30, value: 60 * 60 * 24 * 7, name: "week" },
+        { limit: 60 * 60 * 24 * 365, value: 60 * 60 * 24 * 30, name: "month" },
+        { limit: Infinity, value: 60 * 60 * 24 * 365, name: "year" },
+      ];
+      const unit = units.find((entry) => absSec < entry.limit) || units[units.length - 1];
+      const value = Math.round(diffSec / unit.value);
+      if (value === 0) return "just now";
+      const rtf = new Intl.RelativeTimeFormat(undefined, { numeric: "auto" });
+      return rtf.format(value, unit.name);
     }
 
     function hostToUrl(host) {
@@ -492,11 +520,6 @@
       row.appendChild(purgeBtn);
       actions.appendChild(row);
 
-      const note = document.createElement("div");
-      note.className = "action-note";
-      note.textContent =
-        "Instantly purge cached files to force Cloudflare to fetch a fresh version of those files from your web server. You can purge files selectively or all at once. Note: purging may temporarily degrade performance and increase load on your origin.";
-      actions.appendChild(note);
       actions.appendChild(statusEl);
 
       return actions;
@@ -605,29 +628,26 @@
         dataDiv.className = "inline-muted";
         dataDiv.textContent = "Data: " + (svc.data_bytes != null ? formatBytes(svc.data_bytes) : "—");
 
-        const hostsDiv = document.createElement("div");
-        hostsDiv.className = "inline-muted";
-        hostsDiv.appendChild(document.createTextNode("Hosts: "));
-
         const hostnames = svc.hostnames || [];
-        if (hostnames.length === 0) {
-          hostsDiv.appendChild(document.createTextNode("—"));
-        } else {
+        if (hostnames.length > 0) {
+          const hostsDiv = document.createElement("div");
+          hostsDiv.className = "inline-muted";
           hostnames.forEach((h, i) => {
             const url = hostToUrl(h);
-            const badge = document.createElement("a");
-            badge.className = "badge link-badge";
-            badge.textContent = url || h;
+            const link = document.createElement(url ? "a" : "span");
+            link.className = "host-link";
+            link.textContent = url || h;
             if (url) {
-              badge.href = url;
-              badge.target = "_blank";
-              badge.rel = "noopener noreferrer";
+              link.href = url;
+              link.target = "_blank";
+              link.rel = "noopener noreferrer";
             }
-            hostsDiv.appendChild(badge);
+            hostsDiv.appendChild(link);
             if (i < hostnames.length - 1) {
-              hostsDiv.appendChild(document.createTextNode(" "));
+              hostsDiv.appendChild(document.createTextNode(" / "));
             }
           });
+          serviceEl.appendChild(hostsDiv);
         }
 
         serviceEl.appendChild(h3);
@@ -636,7 +656,6 @@
         serviceEl.appendChild(portDiv);
         serviceEl.appendChild(uptimeDiv);
         serviceEl.appendChild(dataDiv);
-        serviceEl.appendChild(hostsDiv);
 
         const actions = buildPurgeSection(svc);
         if (actions) {
