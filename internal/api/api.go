@@ -20,6 +20,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/shirou/gopsutil/v3/cpu"
+	"github.com/shirou/gopsutil/v3/mem"
 	"tinyserve/internal/auth"
 	"tinyserve/internal/cloudflare"
 	"tinyserve/internal/docker"
@@ -120,6 +122,12 @@ func (h *Handler) handleStatus(w http.ResponseWriter, r *http.Request) {
 	statusMap, _ := h.containerStatus(r.Context())
 	proxy := summarizeContainer(statusMap["traefik"])
 	tunnel := summarizeContainer(statusMap["cloudflared"])
+	status := "ok"
+	var statusDetail string
+	if composeExists(h.currentDir()) && !containerHealthy(statusMap["traefik"]) {
+		status = "degraded"
+		statusDetail = "Traefik not running"
+	}
 
 	var tunnelConfig map[string]any
 	if st.Settings.Tunnel.TunnelID != "" {
@@ -131,7 +139,7 @@ func (h *Handler) handleStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp := map[string]any{
-		"status":               "ok",
+		"status":               status,
 		"service_count":        len(st.Services),
 		"updated_at":           st.UpdatedAt.Format(time.RFC3339),
 		"proxy":                proxy,
@@ -140,8 +148,19 @@ func (h *Handler) handleStatus(w http.ResponseWriter, r *http.Request) {
 		"has_cloudflare_token": st.Settings.CloudflareAPIToken != "",
 		"uptime_seconds":       int(time.Since(h.StartedAt).Seconds()),
 	}
+	if statusDetail != "" {
+		resp["status_detail"] = statusDetail
+	}
 	if freeBytes, err := freeDiskSpace("/"); err == nil {
 		resp["free_disk_bytes"] = freeBytes
+	}
+	if cpuPercent, err := hostCPUPercent(); err == nil {
+		resp["cpu_percent"] = cpuPercent
+	}
+	if total, used, usedPercent, err := hostMemoryUsage(); err == nil {
+		resp["memory_total_bytes"] = total
+		resp["memory_used_bytes"] = used
+		resp["memory_used_percent"] = usedPercent
 	}
 	writeJSON(w, resp)
 }
@@ -1438,6 +1457,20 @@ func describeStatus(c docker.ContainerStatus) string {
 	return c.State
 }
 
+func containerHealthy(c docker.ContainerStatus) bool {
+	if c.Service == "" {
+		return false
+	}
+	state := strings.ToLower(c.State)
+	if state != "running" && state != "healthy" {
+		return false
+	}
+	if c.Health != "" && strings.ToLower(c.Health) != "healthy" {
+		return false
+	}
+	return true
+}
+
 func setNoCache(w http.ResponseWriter) {
 	w.Header().Set("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
 	w.Header().Set("Pragma", "no-cache")
@@ -2382,4 +2415,38 @@ func freeDiskSpace(path string) (uint64, error) {
 		return 0, err
 	}
 	return stat.Bavail * uint64(stat.Bsize), nil
+}
+
+func composeExists(dir string) bool {
+	if dir == "" {
+		return false
+	}
+	_, err := os.Stat(filepath.Join(dir, "docker-compose.yml"))
+	return err == nil
+}
+
+func hostCPUPercent() (float64, error) {
+	percents, err := cpu.Percent(0, false)
+	if err != nil {
+		return 0, err
+	}
+	if len(percents) == 0 {
+		return 0, fmt.Errorf("cpu percent unavailable")
+	}
+	p := percents[0]
+	if p < 0 {
+		p = 0
+	}
+	if p > 100 {
+		p = 100
+	}
+	return p, nil
+}
+
+func hostMemoryUsage() (uint64, uint64, float64, error) {
+	info, err := mem.VirtualMemory()
+	if err != nil {
+		return 0, 0, 0, err
+	}
+	return info.Total, info.Used, info.UsedPercent, nil
 }

@@ -327,6 +327,7 @@
         <div class="card">
           <div class="metric" id="status-text">—</div>
           <div class="label">Status</div>
+          <div class="inline-muted" id="status-detail" style="display: none;"></div>
         </div>
         <div class="card">
           <div class="metric" id="service-count">0</div>
@@ -337,9 +338,13 @@
           <div class="label">Last state update</div>
         </div>
         <div class="card">
-          <div class="metric" id="proxy-status">—</div>
-          <div class="label">Traefik</div>
-          <div class="inline-muted" id="proxy-health">—</div>
+          <div class="metric" id="cpu-usage">—</div>
+          <div class="label">CPU usage</div>
+        </div>
+        <div class="card">
+          <div class="metric" id="memory-usage">—</div>
+          <div class="label">Memory usage</div>
+          <div class="inline-muted" id="memory-detail">—</div>
         </div>
         <div class="card">
           <div class="metric" id="tunnel-status">—</div>
@@ -387,13 +392,15 @@
 
   <script>
     const statusText = document.getElementById("status-text");
+    const statusDetail = document.getElementById("status-detail");
     const serviceCount = document.getElementById("service-count");
     const updatedAt = document.getElementById("updated-at");
     const servicesContainer = document.getElementById("services");
     const statusError = document.getElementById("status-error");
     const servicesError = document.getElementById("services-error");
-    const proxyStatus = document.getElementById("proxy-status");
-    const proxyHealth = document.getElementById("proxy-health");
+    const cpuUsageEl = document.getElementById("cpu-usage");
+    const memoryUsageEl = document.getElementById("memory-usage");
+    const memoryDetailEl = document.getElementById("memory-detail");
     const tunnelStatus = document.getElementById("tunnel-status");
     const tunnelHealth = document.getElementById("tunnel-health");
     const uptimeEl = document.getElementById("uptime");
@@ -430,6 +437,13 @@
     function renderStatus(data) {
       statusText.textContent = data.status || "unknown";
       statusText.className = data.status === "ok" ? "metric ok" : "metric warn";
+      if (data.status_detail) {
+        statusDetail.textContent = data.status_detail;
+        statusDetail.style.display = "block";
+      } else {
+        statusDetail.textContent = "";
+        statusDetail.style.display = "none";
+      }
       serviceCount.textContent = data.service_count ?? 0;
       if (data.updated_at) {
         const updatedDate = new Date(data.updated_at);
@@ -439,15 +453,28 @@
         updatedAt.textContent = "—";
         updatedAt.title = "";
       }
-      const proxy = data.proxy || {};
-      proxyStatus.textContent = proxy.state || "unknown";
-      proxyStatus.className = isHealthy(proxy) ? "metric ok" : "metric warn";
-      proxyHealth.textContent = proxy.health || "";
 
       const tunnel = data.tunnel || {};
       tunnelStatus.textContent = tunnel.state || "unknown";
       tunnelStatus.className = isHealthy(tunnel) ? "metric ok" : "metric warn";
       tunnelHealth.textContent = tunnel.health || "";
+
+      if (data.cpu_percent != null) {
+        cpuUsageEl.textContent = formatPercent(data.cpu_percent);
+      } else {
+        cpuUsageEl.textContent = "—";
+      }
+
+      if (data.memory_used_percent != null) {
+        memoryUsageEl.textContent = formatPercent(data.memory_used_percent);
+      } else {
+        memoryUsageEl.textContent = "—";
+      }
+      if (data.memory_used_bytes != null && data.memory_total_bytes != null) {
+        memoryDetailEl.textContent = `${formatBytes(data.memory_used_bytes)} / ${formatBytes(data.memory_total_bytes)}`;
+      } else {
+        memoryDetailEl.textContent = "—";
+      }
 
       uptimeEl.textContent = data.uptime_seconds != null ? formatUptime(data.uptime_seconds) : "—";
       freeDiskEl.textContent = data.free_disk_bytes != null ? formatBytes(data.free_disk_bytes) : "—";
@@ -467,6 +494,14 @@
       if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + " KB";
       if (bytes < 1024 * 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(1) + " MB";
       return (bytes / (1024 * 1024 * 1024)).toFixed(1) + " GB";
+    }
+
+    function formatPercent(value) {
+      const num = Number(value);
+      if (!Number.isFinite(num)) return "—";
+      if (num < 1) return num.toFixed(1) + "%";
+      if (num < 10) return num.toFixed(1) + "%";
+      return Math.round(num) + "%";
     }
 
     function formatRelativeTime(date) {
