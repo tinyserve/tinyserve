@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"tinyserve/internal/api"
+	"tinyserve/internal/docker"
 	"tinyserve/internal/state"
 	"tinyserve/internal/version"
 	"tinyserve/webui"
@@ -61,6 +62,8 @@ func run() error {
 	generatedRoot := filepath.Join(dataDir, "generated")
 	backupsDir := filepath.Join(dataDir, "backups")
 	cloudflaredDir := filepath.Join(dataDir, "cloudflared")
+
+	autoRecoverServices(ctx, generatedRoot)
 
 	browserAuth := api.NewBrowserAuthMiddleware(store)
 	handler := api.NewHandler(store, generatedRoot, backupsDir, filepath.Join(dataDir, "state.db"), cloudflaredDir)
@@ -133,6 +136,22 @@ func run() error {
 		return nil
 	case err := <-errChan:
 		return err
+	}
+}
+
+func autoRecoverServices(ctx context.Context, generatedRoot string) {
+	currentDir := filepath.Join(generatedRoot, "current")
+	composePath := filepath.Join(currentDir, "docker-compose.yml")
+	if _, err := os.Stat(composePath); err != nil {
+		log.Printf("auto-recover: no existing compose config, skipping")
+		return
+	}
+	log.Printf("auto-recover: bringing up services from %s", currentDir)
+	runner := docker.NewRunner(currentDir)
+	if out, err := runner.Up(ctx); err != nil {
+		log.Printf("auto-recover: docker compose up failed: %v\n%s", err, out)
+	} else {
+		log.Printf("auto-recover: services started successfully")
 	}
 }
 
