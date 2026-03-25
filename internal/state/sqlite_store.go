@@ -15,7 +15,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const schemaVersion = 4
+const schemaVersion = 5
 
 const schema = `
 CREATE TABLE IF NOT EXISTS schema_version (
@@ -53,6 +53,8 @@ CREATE TABLE IF NOT EXISTS services (
 	hostnames TEXT,
 	env TEXT,
 	volumes TEXT,
+	command TEXT,
+	entrypoint TEXT,
 	healthcheck TEXT,
 	memory_limit_mb INTEGER DEFAULT 0,
 	enabled INTEGER NOT NULL DEFAULT 0,
@@ -147,6 +149,12 @@ func (s *SQLiteStore) migrate() error {
 		_, _ = s.db.Exec(`ALTER TABLE settings ADD COLUMN remote_api_hostname TEXT`)
 	}
 
+	if version < 5 {
+		// v5: add command and entrypoint fields to services
+		_, _ = s.db.Exec(`ALTER TABLE services ADD COLUMN command TEXT`)
+		_, _ = s.db.Exec(`ALTER TABLE services ADD COLUMN entrypoint TEXT`)
+	}
+
 	if _, err := s.db.Exec(`INSERT OR REPLACE INTO schema_version (version) VALUES (?)`, schemaVersion); err != nil {
 		return fmt.Errorf("set schema version: %w", err)
 	}
@@ -234,8 +242,8 @@ func (s *SQLiteStore) Load(ctx context.Context) (State, error) {
 	}
 
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, name, type, image, internal_port, hostnames, env, volumes, 
-		       healthcheck, memory_limit_mb, enabled, last_deploy, status
+		SELECT id, name, type, image, internal_port, hostnames, env, volumes,
+		       command, entrypoint, healthcheck, memory_limit_mb, enabled, last_deploy, status
 		FROM services
 	`)
 	if err != nil {
@@ -245,12 +253,12 @@ func (s *SQLiteStore) Load(ctx context.Context) (State, error) {
 
 	for rows.Next() {
 		var svc Service
-		var hostnames, env, volumes, healthcheck, lastDeploy, status sql.NullString
+		var hostnames, env, volumes, command, entrypoint, healthcheck, lastDeploy, status sql.NullString
 		var enabled int
 
 		if err := rows.Scan(
 			&svc.ID, &svc.Name, &svc.Type, &svc.Image, &svc.InternalPort,
-			&hostnames, &env, &volumes, &healthcheck,
+			&hostnames, &env, &volumes, &command, &entrypoint, &healthcheck,
 			&svc.Resources.MemoryLimitMB, &enabled, &lastDeploy, &status,
 		); err != nil {
 			return State{}, fmt.Errorf("scan service: %w", err)
@@ -267,6 +275,12 @@ func (s *SQLiteStore) Load(ctx context.Context) (State, error) {
 		}
 		if volumes.Valid && volumes.String != "" {
 			_ = json.Unmarshal([]byte(volumes.String), &svc.Volumes)
+		}
+		if command.Valid && command.String != "" {
+			_ = json.Unmarshal([]byte(command.String), &svc.Command)
+		}
+		if entrypoint.Valid && entrypoint.String != "" {
+			_ = json.Unmarshal([]byte(entrypoint.String), &svc.Entrypoint)
 		}
 		if healthcheck.Valid && healthcheck.String != "" {
 			var hc ServiceHealthcheck
@@ -426,6 +440,8 @@ func (s *SQLiteStore) Save(ctx context.Context, st State) error {
 		hostnames, _ := json.Marshal(svc.Hostnames)
 		env, _ := json.Marshal(svc.Env)
 		volumes, _ := json.Marshal(svc.Volumes)
+		command, _ := json.Marshal(svc.Command)
+		entrypoint, _ := json.Marshal(svc.Entrypoint)
 		var healthcheck []byte
 		if svc.Healthcheck != nil {
 			healthcheck, _ = json.Marshal(svc.Healthcheck)
@@ -441,8 +457,8 @@ func (s *SQLiteStore) Save(ctx context.Context, st State) error {
 
 		_, err = tx.ExecContext(ctx, `
 			INSERT INTO services (id, name, type, image, internal_port, hostnames, env, volumes,
-			                      healthcheck, memory_limit_mb, enabled, last_deploy, status)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			                      command, entrypoint, healthcheck, memory_limit_mb, enabled, last_deploy, status)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			ON CONFLICT(id) DO UPDATE SET
 				name = excluded.name,
 				type = excluded.type,
@@ -451,6 +467,8 @@ func (s *SQLiteStore) Save(ctx context.Context, st State) error {
 				hostnames = excluded.hostnames,
 				env = excluded.env,
 				volumes = excluded.volumes,
+				command = excluded.command,
+				entrypoint = excluded.entrypoint,
 				healthcheck = excluded.healthcheck,
 				memory_limit_mb = excluded.memory_limit_mb,
 				enabled = excluded.enabled,
@@ -458,7 +476,7 @@ func (s *SQLiteStore) Save(ctx context.Context, st State) error {
 				status = excluded.status
 		`,
 			svc.ID, svc.Name, svc.Type, svc.Image, svc.InternalPort,
-			string(hostnames), string(env), string(volumes), string(healthcheck),
+			string(hostnames), string(env), string(volumes), string(command), string(entrypoint), string(healthcheck),
 			svc.Resources.MemoryLimitMB, enabled, lastDeploy, nullString(svc.Status),
 		)
 		if err != nil {

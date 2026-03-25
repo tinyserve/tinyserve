@@ -335,6 +335,8 @@ type addServiceRequest struct {
 	Hostnames    []string                  `json:"hostnames,omitempty"`
 	Env          map[string]string         `json:"env,omitempty"`
 	Volumes      []string                  `json:"volumes,omitempty"`
+	Command      []string                  `json:"command,omitempty"`
+	Entrypoint   []string                  `json:"entrypoint,omitempty"`
 	Healthcheck  *state.ServiceHealthcheck `json:"healthcheck,omitempty"`
 	Resources    state.ServiceResources    `json:"resources"`
 	Enabled      *bool                     `json:"enabled,omitempty"`
@@ -363,6 +365,8 @@ func (h *Handler) handleAddService(w http.ResponseWriter, r *http.Request) {
 		Hostnames:    payload.Hostnames,
 		Env:          payload.Env,
 		Volumes:      payload.Volumes,
+		Command:      payload.Command,
+		Entrypoint:   payload.Entrypoint,
 		Healthcheck:  payload.Healthcheck,
 		Resources:    payload.Resources,
 	}
@@ -482,6 +486,14 @@ func (h *Handler) handleAddService(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
+	}
+	if err := validate.CommandArgs("command", svc.Command); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if err := validate.CommandArgs("entrypoint", svc.Entrypoint); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
 	}
 
 	// Validate healthcheck
@@ -668,6 +680,14 @@ func (h *Handler) handleUpdateService(w http.ResponseWriter, r *http.Request, na
 	}
 	if updated.InternalPort == 0 {
 		http.Error(w, "internal_port is required", http.StatusBadRequest)
+		return
+	}
+	if err := validate.CommandArgs("command", updated.Command); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if err := validate.CommandArgs("entrypoint", updated.Entrypoint); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 

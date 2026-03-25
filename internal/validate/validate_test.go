@@ -219,6 +219,29 @@ func TestHealthcheckCommand(t *testing.T) {
 	}
 }
 
+func TestCommandArgs(t *testing.T) {
+	tests := []struct {
+		name    string
+		cmd     []string
+		wantErr bool
+	}{
+		{"valid simple", []string{"run", "--", "--cms"}, false},
+		{"valid empty", []string{}, false},
+		{"valid nil", nil, false},
+		{"too many args", make([]string, 101), true},
+		{"null byte in arg", []string{"run", "cms\x00evil"}, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := CommandArgs("command", tt.cmd)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("CommandArgs(%v) error = %v, wantErr %v", tt.cmd, err, tt.wantErr)
+			}
+		})
+	}
+}
+
 func TestContainsYAMLInjection(t *testing.T) {
 	tests := []struct {
 		name string

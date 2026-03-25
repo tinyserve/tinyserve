@@ -146,23 +146,28 @@ func VolumePath(volume string) error {
 	return nil
 }
 
-// HealthcheckCommand validates a healthcheck command
-func HealthcheckCommand(cmd []string) error {
+// CommandArgs validates a Docker/Compose string array field like command or entrypoint.
+func CommandArgs(field string, cmd []string) error {
 	if len(cmd) == 0 {
 		return nil // empty is allowed
 	}
 	if len(cmd) > 100 {
-		return fmt.Errorf("healthcheck command has too many arguments (max 100)")
+		return fmt.Errorf("%s has too many arguments (max 100)", field)
 	}
 	for i, arg := range cmd {
 		if len(arg) > 4096 {
-			return fmt.Errorf("healthcheck argument %d too long (max 4096 characters)", i)
+			return fmt.Errorf("%s argument %d too long (max 4096 characters)", field, i)
 		}
 		if strings.Contains(arg, "\x00") {
-			return fmt.Errorf("healthcheck argument contains null byte")
+			return fmt.Errorf("%s argument contains null byte", field)
 		}
 	}
 	return nil
+}
+
+// HealthcheckCommand validates a healthcheck command
+func HealthcheckCommand(cmd []string) error {
+	return CommandArgs("healthcheck command", cmd)
 }
 
 // Port validates a port number

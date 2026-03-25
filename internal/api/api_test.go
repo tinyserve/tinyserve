@@ -94,6 +94,8 @@ func TestHandleAddService(t *testing.T) {
 		"image":         "nginx:latest",
 		"internal_port": 80,
 		"hostnames":     []string{"testapp.example.com"},
+		"command":       []string{"run", "--", "--cms"},
+		"entrypoint":    []string{"/bin/statik"},
 	}
 	body, _ := json.Marshal(payload)
 
@@ -118,6 +120,14 @@ func TestHandleAddService(t *testing.T) {
 	if svc["id"] == nil || svc["id"] == "" {
 		t.Error("service should have an ID")
 	}
+	command, ok := svc["command"].([]any)
+	if !ok || len(command) != 3 {
+		t.Errorf("service command = %v, want 3 entries", svc["command"])
+	}
+	entrypoint, ok := svc["entrypoint"].([]any)
+	if !ok || len(entrypoint) != 1 || entrypoint[0] != "/bin/statik" {
+		t.Errorf("service entrypoint = %v, want [/bin/statik]", svc["entrypoint"])
+	}
 }
 
 func TestHandleAddServiceValidation(t *testing.T) {
@@ -134,6 +144,16 @@ func TestHandleAddServiceValidation(t *testing.T) {
 			payload: map[string]any{
 				"name":          "test",
 				"internal_port": 80,
+			},
+			wantStatus: http.StatusBadRequest,
+		},
+		{
+			name: "invalid command",
+			payload: map[string]any{
+				"name":          "test",
+				"image":         "nginx:latest",
+				"internal_port": 80,
+				"command":       []string{"ok", "bad\x00arg"},
 			},
 			wantStatus: http.StatusBadRequest,
 		},

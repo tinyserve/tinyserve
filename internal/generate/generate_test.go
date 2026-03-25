@@ -401,6 +401,52 @@ func TestGenerateComposeWithVolumes(t *testing.T) {
 	}
 }
 
+func TestGenerateComposeWithCommandAndEntrypoint(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "tinyserve-generate-test-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	s := state.NewState()
+	s.Services = []state.Service{
+		{
+			Name:         "statik-cms",
+			Image:        "ghcr.io/ptmt/statik:latest",
+			InternalPort: 3000,
+			Enabled:      true,
+			Entrypoint:   []string{"/bin/statik"},
+			Command:      []string{"run", "--", "--root-path", "/github/workspace", "--cms"},
+		},
+	}
+
+	out, err := GenerateBaseFiles(context.Background(), s, tmpDir)
+	if err != nil {
+		t.Fatalf("GenerateBaseFiles() error = %v", err)
+	}
+
+	content, err := os.ReadFile(out.ComposePath)
+	if err != nil {
+		t.Fatalf("failed to read compose: %v", err)
+	}
+
+	if !strings.Contains(string(content), "entrypoint:") {
+		t.Error("compose missing entrypoint section")
+	}
+	if !strings.Contains(string(content), `- "/bin/statik"`) {
+		t.Error("compose missing entrypoint value")
+	}
+	if !strings.Contains(string(content), "command:") {
+		t.Error("compose missing command section")
+	}
+	if !strings.Contains(string(content), `- "--root-path"`) {
+		t.Error("compose missing command argument")
+	}
+	if !strings.Contains(string(content), `- "/github/workspace"`) {
+		t.Error("compose missing command value")
+	}
+}
+
 func TestGenerateComposeWithMemoryLimit(t *testing.T) {
 	tmpDir, err := os.MkdirTemp("", "tinyserve-generate-test-*")
 	if err != nil {

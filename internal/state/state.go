@@ -68,6 +68,8 @@ type Service struct {
 	Hostnames     []string            `json:"hostnames,omitempty"`
 	Env           map[string]string   `json:"env,omitempty"`
 	Volumes       []string            `json:"volumes,omitempty"`
+	Command       []string            `json:"command,omitempty"`
+	Entrypoint    []string            `json:"entrypoint,omitempty"`
 	Healthcheck   *ServiceHealthcheck `json:"healthcheck,omitempty"`
 	Resources     ServiceResources    `json:"resources"`
 	Enabled       bool                `json:"enabled"`

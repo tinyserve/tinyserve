@@ -273,6 +273,8 @@ func TestSQLiteStore(t *testing.T) {
 		Hostnames:    []string{"test.example.com"},
 		Env:          map[string]string{"FOO": "bar"},
 		Volumes:      []string{"/data:/data"},
+		Command:      []string{"run", "--", "--cms"},
+		Entrypoint:   []string{"/bin/statik"},
 		Healthcheck: &ServiceHealthcheck{
 			Command:         []string{"curl", "-f", "http://localhost/"},
 			IntervalSeconds: 30,
@@ -315,6 +317,12 @@ func TestSQLiteStore(t *testing.T) {
 	}
 	if len(svc.Volumes) != 1 || svc.Volumes[0] != "/data:/data" {
 		t.Error("Load() did not restore volumes")
+	}
+	if len(svc.Command) != 3 || svc.Command[0] != "run" {
+		t.Errorf("Load() did not restore command: %v", svc.Command)
+	}
+	if len(svc.Entrypoint) != 1 || svc.Entrypoint[0] != "/bin/statik" {
+		t.Errorf("Load() did not restore entrypoint: %v", svc.Entrypoint)
 	}
 	if svc.Healthcheck == nil || len(svc.Healthcheck.Command) != 3 {
 		t.Error("Load() did not restore healthcheck")

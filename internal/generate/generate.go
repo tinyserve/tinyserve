@@ -205,6 +205,20 @@ func appendService(sb *strings.Builder, svc state.Service, defaultDomain string)
 		}
 	}
 
+	if len(svc.Entrypoint) > 0 {
+		sb.WriteString("    entrypoint:\n")
+		for _, item := range svc.Entrypoint {
+			sb.WriteString(fmt.Sprintf("      - %q\n", item))
+		}
+	}
+
+	if len(svc.Command) > 0 {
+		sb.WriteString("    command:\n")
+		for _, item := range svc.Command {
+			sb.WriteString(fmt.Sprintf("      - %q\n", item))
+		}
+	}
+
 	if svc.Healthcheck != nil {
 		h := svc.Healthcheck
 		sb.WriteString("    healthcheck:\n")
