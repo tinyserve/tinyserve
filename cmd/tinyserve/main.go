@@ -99,9 +99,11 @@ commands:
   init                           interactive setup wizard
        [--cloudflare-api-token T] [--default-domain D] [--tunnel-name N] [--account-id ID] [--skip-cloudflare]
   service add --image [--name N] [--port P] [--hostname h] [--env K=V] [--env-file .env]
-               [--mem MB] [--volume host:container] [--healthcheck "CMD ..."]
+               [--mem MB] [--volume host:container] [--healthcheck "CMD ..."] [--command "ARG ..."]
                [--auto-volumes | --no-auto-volumes]
                [--cloudflare] [--deploy] [--timeout SEC]
+               example: tinyserve service add --name statik-cms --image ghcr.io/ptmt/statik:latest --port 3000
+                        --command "run -- --root-path /github/workspace --cms"
   service list                 list all services
   service edit --name NAME [--deploy] [--timeout SEC]
                                open service config in $EDITOR
@@ -333,6 +335,9 @@ func cmdServiceAdd(args []string) error {
 		payload["healthcheck"] = map[string]any{
 			"command": strings.Fields(opts.Healthcheck),
 		}
+	}
+	if opts.Command != "" {
+		payload["command"] = strings.Fields(opts.Command)
 	}
 	body, _ := json.Marshal(payload)
 	req, err := http.NewRequest(http.MethodPost, apiBase()+"/services", bytes.NewReader(body))
@@ -586,6 +591,7 @@ type addOptions struct {
 	Volumes     []string
 	AutoVolumes bool
 	Healthcheck string
+	Command     string
 	Memory      int
 	Cloudflare  bool
 	Deploy      bool
@@ -676,6 +682,12 @@ func parseServiceAdd(args []string) (addOptions, error) {
 				return opts, fmt.Errorf("--healthcheck requires a command")
 			}
 			opts.Healthcheck = args[i]
+		case "--command":
+			i++
+			if i >= len(args) {
+				return opts, fmt.Errorf("--command requires a command")
+			}
+			opts.Command = args[i]
 		case "--cloudflare":
 			opts.Cloudflare = true
 		case "--deploy":
