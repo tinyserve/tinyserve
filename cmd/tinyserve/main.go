@@ -44,6 +44,8 @@ func main() {
 		err = cmdLogs(os.Args[2:])
 	case "rollback":
 		err = cmdRollback()
+	case "backup":
+		err = cmdBackup(os.Args[2:])
 	case "checklist":
 		err = cmdChecklist()
 	case "launchd":
@@ -111,6 +113,16 @@ commands:
   deploy [--service NAME]... [--timeout SEC]  pull, restart, and wait for health
   logs --service NAME [--tail N] [--follow]
   rollback                     restore last backup
+  backup config [--bucket B] [--prefix P] [--endpoint URL] [--region R] [--profile P]
+                               configure S3-compatible backup upload via aws CLI
+  backup create [--partial | --full] [--output DIR] [--no-upload]
+                               create a native backup artifact and optionally upload it
+  backup list [--partial | --full | --all]
+                               list configured S3 backups
+  backup restore <timestamp> [--partial | --full] [--force]
+                               download and restore a backup; daemon must be stopped unless --force
+  backup restore --artifact PATH [--force]
+                               restore a local backup artifact
   launchd install              install and load launchd agent
   launchd uninstall            unload and remove launchd agent
   launchd status               show launchd agent status

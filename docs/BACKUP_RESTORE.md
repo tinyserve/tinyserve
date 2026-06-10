@@ -2,6 +2,55 @@
 
 This document describes how to back up and restore tinyserve state and service data to/from S3-compatible storage.
 
+## Native CLI Backup
+
+tinyserve now supports native backup artifacts with S3-compatible upload through the AWS CLI. The CLI creates a single `tar.gz` artifact containing a `manifest.json`, a consistent SQLite snapshot, and selected tinyserve data directories.
+
+Configure the destination:
+
+```bash
+tinyserve backup config --bucket my-bucket --prefix tinyserve-backups \
+    --endpoint https://s3.amazonaws.com --region us-east-1
+```
+
+Credentials can come from normal AWS environment variables, an AWS profile, or optional `--access-key` / `--secret-key` flags. The config is stored at `~/Library/Application Support/tinyserve/backup-config.json` with `0600` permissions.
+
+Create and upload a partial backup:
+
+```bash
+tinyserve backup create --partial
+```
+
+Create a full backup without uploading:
+
+```bash
+tinyserve backup create --full --no-upload
+```
+
+List remote backups:
+
+```bash
+tinyserve backup list --all
+```
+
+Restore from S3:
+
+```bash
+brew services stop tinyserve
+tinyserve backup restore 2026-01-10T12-00-00Z --full
+brew services start tinyserve
+```
+
+Restore from a local artifact:
+
+```bash
+brew services stop tinyserve
+tinyserve backup restore --artifact ~/Library/Application\ Support/tinyserve/backups/tinyserve-backup-full-2026-01-10T12-00-00Z.tar.gz
+brew services start tinyserve
+```
+
+Restore refuses to run while the local daemon responds unless `--force` is supplied. Before overwriting an existing data root, restore creates a local full safety artifact under `backups/`.
+
 ## Overview
 
 tinyserve's data lives under `~/Library/Application Support/tinyserve/` and includes:
@@ -22,20 +71,22 @@ tinyserve's data lives under `~/Library/Application Support/tinyserve/` and incl
 ### Full Backup
 
 Includes everything needed to restore a complete tinyserve installation:
-- SQLite database + WAL
-- All generated configs
+- Consistent SQLite database snapshot
+- Active generated configs
 - Service data volumes
-- Docker images (exported as tarballs)
 - Traefik certificates
 - Cloudflared credentials
+- Warnings for explicit host volumes outside tinyserve's data root
 
 **Use case**: Disaster recovery, migrating to new hardware.
+
+Docker image export is not included in the native full backup yet. After restore, run `tinyserve deploy` to pull images and start containers.
 
 ### Partial Backup (State Only)
 
 Includes only state and configuration, excludes large Docker images:
-- SQLite database + WAL
-- Generated configs
+- Consistent SQLite database snapshot
+- Active generated configs
 - Cloudflared credentials
 - Traefik certificates
 
@@ -79,23 +130,15 @@ Backs up per-service persistent volumes only:
 s3://your-bucket/tinyserve-backups/
 ├── full/
 │   ├── 2026-01-10T12-00-00Z/
-│   │   ├── state.db
-│   │   ├── state.db-wal
-│   │   ├── configs.tar.gz
-│   │   ├── services.tar.gz
-│   │   ├── images.tar.gz
-│   │   └── manifest.json
+│   │   └── tinyserve-backup-full-2026-01-10T12-00-00Z.tar.gz
 │   └── ...
-├── partial/
-│   ├── 2026-01-10T06-00-00Z/
-│   │   ├── state.db
-│   │   ├── state.db-wal
-│   │   ├── configs.tar.gz
-│   │   └── manifest.json
-│   └── ...
-└── wal/
-    └── state.db-wal-2026-01-10T12-30-00Z  # continuous WAL shipping
+└── partial/
+    ├── 2026-01-10T06-00-00Z/
+    │   └── tinyserve-backup-partial-2026-01-10T06-00-00Z.tar.gz
+    └── ...
 ```
+
+The older shell-script examples below are retained as manual references for custom workflows, Docker image export, and WAL experiments. Prefer the native CLI commands for normal backups.
 
 ## Backup Procedures
 
@@ -488,26 +531,24 @@ aws s3 ls "s3://${BUCKET}/${PREFIX}/wal/" | while read -r line; do
 done
 ```
 
-## Future: Native CLI Integration
-
-Planned CLI commands for backup/restore (not yet implemented):
+## Native CLI Commands
 
 ```bash
 # Configure S3 backup destination
 tinyserve backup config --bucket my-bucket --prefix tinyserve-backups \
-    --access-key KEY --secret-key SECRET --endpoint https://s3.amazonaws.com
+    --endpoint https://s3.amazonaws.com
 
 # Manual backup
-tinyserve backup create [--full | --partial]
+tinyserve backup create [--full | --partial] [--no-upload]
 
 # List backups
-tinyserve backup list
+tinyserve backup list [--full | --partial | --all]
 
 # Restore
-tinyserve backup restore <timestamp> [--full | --partial]
+tinyserve backup restore <timestamp> [--full | --partial] [--force]
+tinyserve backup restore --artifact PATH [--force]
 
-# Enable scheduled backups
-tinyserve backup schedule --partial-daily --full-weekly --wal-continuous
+# Scheduling and continuous WAL shipping are still future work.
 ```
 
 ## Checklist

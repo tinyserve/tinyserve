@@ -44,6 +44,10 @@ Generated and runtime files live at `~/Library/Application Support/tinyserve/` (
 - `tinyserve deploy [--service NAME]` — regenerate compose config and `docker compose up -d`.
 - `tinyserve logs --service NAME [--tail N]`
 - `tinyserve rollback` — restore the last promoted compose config (best-effort).
+- `tinyserve backup config --bucket BUCKET [--prefix P] [--endpoint URL]` — configure S3-compatible artifact storage via AWS CLI.
+- `tinyserve backup create [--partial | --full] [--no-upload]` — create a native backup artifact and optionally upload it.
+- `tinyserve backup list [--all | --partial | --full]`
+- `tinyserve backup restore <timestamp> [--partial | --full]` — restore after stopping the daemon.
 
 ## Next steps
 

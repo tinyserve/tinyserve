@@ -13,6 +13,11 @@
 - [x] CLI: add deploy status tracking, follow logs (`--follow`), and error hints when daemon is not running.
 - [x] Testing: unit tests for state (76%), generate (93%), and API handlers (30%). Covers service management, hostname validation, backup pruning, compose generation, SQLite store.
 - [x] Launchd/docs: plist template with proper env vars, LAUNCHD.md with install/uninstall/troubleshooting/recovery instructions.
+- [x] Backup/Restore: native backup artifacts with S3-compatible upload via AWS CLI:
+  - [x] `tinyserve backup config` — configure S3 bucket, prefix, endpoint, profile, and optional credentials.
+  - [x] `tinyserve backup create [--full | --partial]` — create a consistent SQLite snapshot and upload a single artifact.
+  - [x] `tinyserve backup list` — list available backups from S3.
+  - [x] `tinyserve backup restore <timestamp>` — download and restore from S3 with a local safety artifact.
 
 ## Remaining
 
@@ -21,11 +26,8 @@
 - [ ] Deployment workflow: document GitHub Actions → registry → pull flow, tag conventions, and registry auth expectations.
 - [ ] Observability: structured daemon logs, log file rotation under `~/Library/Application Support/tinyserve/logs/`.
 - [ ] Testing: add tests for docker wrapper (mocking exec), cloudflare client (httptest), CLI flag parsing, and full deploy workflow integration tests.
-- [ ] Backup/Restore: implement `tinyserve backup` subcommand with S3-compatible storage support:
-  - `tinyserve backup config` — configure S3 bucket, credentials, endpoint.
-  - `tinyserve backup create [--full | --partial]` — create and upload backup.
-  - `tinyserve backup list` — list available backups from S3.
-  - `tinyserve backup restore <timestamp>` — download and restore from S3.
+- [ ] Backup/Restore follow-ups:
   - `tinyserve backup schedule` — configure periodic backups via launchd.
+  - Docker image export/import for full backups.
   - WAL shipping for near real-time SQLite backup (continuous mode).
 - [ ] Notifications: add Telegram notifications when server deployed or deployment failed.
