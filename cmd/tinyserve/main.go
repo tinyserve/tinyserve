@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"encoding/xml"
 	"fmt"
 	"io"
 	"net/http"
@@ -1012,18 +1013,22 @@ func cmdChecklist() error {
 
 	// 7. Check launchd agent loaded (CLI or brew services)
 	fmt.Print("launchd agent loaded.......... ")
-	cmd = exec.Command("launchctl", "list")
-	output, err := cmd.Output()
-	if err != nil {
-		fmt.Println("? (launchctl error)")
-		allPassed = false
-	} else if strings.Contains(string(output), "dev.tinyserve.daemon") {
-		fmt.Println("✓")
-	} else if strings.Contains(string(output), "homebrew.mxcl.tinyserve") {
-		fmt.Println("✓ (brew services)")
+	if runtime.GOOS != "darwin" {
+		fmt.Println("- (macOS only)")
 	} else {
-		fmt.Println("✗ NOT LOADED")
-		allPassed = false
+		_, cliLoaded, cliErr := launchdServiceState()
+		_, brewLoaded, brewErr := launchdServiceStateForTarget(launchdDomain() + "/homebrew.mxcl.tinyserve")
+		if cliErr != nil || brewErr != nil {
+			fmt.Println("? (launchctl error)")
+			allPassed = false
+		} else if cliLoaded {
+			fmt.Println("✓")
+		} else if brewLoaded {
+			fmt.Println("✓ (brew services)")
+		} else {
+			fmt.Println("✗ NOT LOADED")
+			allPassed = false
+		}
 	}
 
 	// 8. Check sleep disabled (macOS)
@@ -1224,37 +1229,81 @@ func launchdPlistPath() string {
 	return os.ExpandEnv("$HOME/Library/LaunchAgents/dev.tinyserve.daemon.plist")
 }
 
-func cmdLaunchdInstall() error {
-	plistPath := launchdPlistPath()
+func launchdDomain() string {
+	return fmt.Sprintf("gui/%d", os.Getuid())
+}
 
-	// Find the tinyserved binary path
-	tinyservedPath, err := exec.LookPath("tinyserved")
-	if err != nil {
-		// Try common locations
-		candidates := []string{
-			"/opt/homebrew/bin/tinyserved",
-			"/usr/local/bin/tinyserved",
-			os.ExpandEnv("$HOME/go/bin/tinyserved"),
+func launchdServiceTarget() string {
+	return launchdDomain() + "/" + launchdLabel
+}
+
+var runLaunchctl = func(args ...string) ([]byte, error) {
+	return exec.Command("launchctl", args...).CombinedOutput()
+}
+
+func launchctlError(action string, err error, output []byte) error {
+	detail := strings.TrimSpace(string(output))
+	domainUnavailable := strings.Contains(err.Error(), "exit status 134") ||
+		strings.Contains(strings.ToLower(detail), "could not find domain") ||
+		strings.Contains(strings.ToLower(detail), "domain does not support specified action")
+
+	if domainUnavailable {
+		if detail != "" {
+			return fmt.Errorf("launchctl %s: %w\n%s\n\nHint: LaunchAgents require an active macOS desktop login. Log in at the console, then rerun this command (an SSH session alone is not sufficient)", action, err, detail)
 		}
-		for _, p := range candidates {
-			if _, err := os.Stat(p); err == nil {
-				tinyservedPath = p
-				break
+		return fmt.Errorf("launchctl %s: %w\n\nHint: LaunchAgents require an active macOS desktop login. Log in at the console, then rerun this command (an SSH session alone is not sufficient)", action, err)
+	}
+
+	if detail != "" {
+		return fmt.Errorf("launchctl %s: %w\n%s", action, err, detail)
+	}
+	return fmt.Errorf("launchctl %s: %w", action, err)
+}
+
+func launchdServiceState() (output []byte, loaded bool, err error) {
+	return launchdServiceStateForTarget(launchdServiceTarget())
+}
+
+func launchdServiceStateForTarget(target string) (output []byte, loaded bool, err error) {
+	output, err = runLaunchctl("print", target)
+	if err == nil {
+		return output, true, nil
+	}
+	if strings.Contains(strings.ToLower(string(output)), "could not find service") {
+		return output, false, nil
+	}
+	return output, false, launchctlError("print "+target, err, output)
+}
+
+func bootstrapLaunchdAgent(plistPath string) error {
+	if output, err := runLaunchctl("enable", launchdServiceTarget()); err != nil {
+		return launchctlError("enable", err, output)
+	}
+	if output, err := runLaunchctl("bootstrap", launchdDomain(), plistPath); err != nil {
+		return launchctlError("bootstrap", err, output)
+	}
+	return nil
+}
+
+func launchdPID(output []byte) string {
+	for _, line := range strings.Split(string(output), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) == 3 && fields[0] == "pid" && fields[1] == "=" {
+			if pid, err := strconv.Atoi(fields[2]); err == nil && pid > 0 {
+				return fields[2]
 			}
 		}
-		if tinyservedPath == "" {
-			return fmt.Errorf("tinyserved not found in PATH or common locations")
-		}
+	}
+	return ""
+}
+
+func launchdPlist(tinyservedPath string) (string, error) {
+	var escapedPath bytes.Buffer
+	if err := xml.EscapeText(&escapedPath, []byte(tinyservedPath)); err != nil {
+		return "", fmt.Errorf("escape tinyserved path for plist: %w", err)
 	}
 
-	// Ensure LaunchAgents directory exists
-	launchAgentsDir := os.ExpandEnv("$HOME/Library/LaunchAgents")
-	if err := os.MkdirAll(launchAgentsDir, 0755); err != nil {
-		return fmt.Errorf("create LaunchAgents dir: %w", err)
-	}
-
-	// Generate plist content
-	plistContent := fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
+	return fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple Computer//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
@@ -1296,12 +1345,62 @@ func cmdLaunchdInstall() error {
   <string>Background</string>
 </dict>
 </plist>
-`, launchdLabel, tinyservedPath)
+`, launchdLabel, escapedPath.String()), nil
+}
 
-	// Check if already installed
-	if _, err := os.Stat(plistPath); err == nil {
-		// Unload first if exists
-		exec.Command("launchctl", "unload", plistPath).Run()
+func cmdLaunchdInstall() error {
+	plistPath := launchdPlistPath()
+	if runtime.GOOS != "darwin" {
+		return fmt.Errorf("launchd is only available on macOS")
+	}
+
+	// Explicitly target the logged-in user's GUI domain. The legacy `load`
+	// command infers a domain from the caller and may abort in SSH sessions.
+	if output, err := runLaunchctl("print", launchdDomain()); err != nil {
+		return launchctlError("print "+launchdDomain(), err, output)
+	}
+
+	// Find the tinyserved binary path
+	tinyservedPath, err := exec.LookPath("tinyserved")
+	if err != nil {
+		// Try common locations
+		candidates := []string{
+			"/opt/homebrew/bin/tinyserved",
+			"/usr/local/bin/tinyserved",
+			os.ExpandEnv("$HOME/go/bin/tinyserved"),
+		}
+		for _, p := range candidates {
+			if _, err := os.Stat(p); err == nil {
+				tinyservedPath = p
+				break
+			}
+		}
+		if tinyservedPath == "" {
+			return fmt.Errorf("tinyserved not found in PATH or common locations")
+		}
+	}
+	if tinyservedPath, err = filepath.Abs(tinyservedPath); err != nil {
+		return fmt.Errorf("resolve tinyserved path: %w", err)
+	}
+
+	// Ensure LaunchAgents directory exists
+	launchAgentsDir := os.ExpandEnv("$HOME/Library/LaunchAgents")
+	if err := os.MkdirAll(launchAgentsDir, 0755); err != nil {
+		return fmt.Errorf("create LaunchAgents dir: %w", err)
+	}
+
+	// Stop an existing registration before replacing its plist.
+	if _, loaded, err := launchdServiceState(); err != nil {
+		return err
+	} else if loaded {
+		if output, err := runLaunchctl("bootout", launchdServiceTarget()); err != nil {
+			return launchctlError("bootout", err, output)
+		}
+	}
+
+	plistContent, err := launchdPlist(tinyservedPath)
+	if err != nil {
+		return err
 	}
 
 	// Write plist
@@ -1309,10 +1408,9 @@ func cmdLaunchdInstall() error {
 		return fmt.Errorf("write plist: %w", err)
 	}
 
-	// Load the agent
-	cmd := exec.Command("launchctl", "load", plistPath)
-	if output, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("launchctl load: %w\n%s", err, output)
+	// Clear a previous disabled override, then load the agent in the GUI domain.
+	if err := bootstrapLaunchdAgent(plistPath); err != nil {
+		return err
 	}
 
 	fmt.Printf("✓ Installed launchd agent\n")
@@ -1324,20 +1422,36 @@ func cmdLaunchdInstall() error {
 
 func cmdLaunchdUninstall() error {
 	plistPath := launchdPlistPath()
+	if runtime.GOOS != "darwin" {
+		return fmt.Errorf("launchd is only available on macOS")
+	}
 
-	if _, err := os.Stat(plistPath); os.IsNotExist(err) {
+	plistExists := true
+	if _, err := os.Stat(plistPath); err != nil {
+		if !os.IsNotExist(err) {
+			return fmt.Errorf("stat plist: %w", err)
+		}
+		plistExists = false
+	}
+
+	_, loaded, err := launchdServiceState()
+	if err != nil {
+		return err
+	}
+	if !plistExists && !loaded {
 		return fmt.Errorf("launchd agent not installed (no plist at %s)", plistPath)
 	}
 
-	// Unload the agent
-	cmd := exec.Command("launchctl", "unload", plistPath)
-	if output, err := cmd.CombinedOutput(); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: launchctl unload: %s\n", output)
+	if loaded {
+		if output, err := runLaunchctl("bootout", launchdServiceTarget()); err != nil {
+			return launchctlError("bootout", err, output)
+		}
 	}
 
-	// Remove the plist
-	if err := os.Remove(plistPath); err != nil {
-		return fmt.Errorf("remove plist: %w", err)
+	if plistExists {
+		if err := os.Remove(plistPath); err != nil {
+			return fmt.Errorf("remove plist: %w", err)
+		}
 	}
 
 	fmt.Println("✓ Uninstalled launchd agent")
@@ -1346,6 +1460,9 @@ func cmdLaunchdUninstall() error {
 
 func cmdLaunchdStatus() error {
 	plistPath := launchdPlistPath()
+	if runtime.GOOS != "darwin" {
+		return fmt.Errorf("launchd is only available on macOS")
+	}
 
 	// Check plist exists
 	fmt.Print("Plist installed............... ")
@@ -1358,35 +1475,22 @@ func cmdLaunchdStatus() error {
 
 	// Check if loaded
 	fmt.Print("Agent loaded.................. ")
-	cmd := exec.Command("launchctl", "list")
-	output, err := cmd.Output()
+	output, loaded, err := launchdServiceState()
 	if err != nil {
 		fmt.Println("? (launchctl error)")
-		return nil
-	}
-
-	loaded := false
-	var pid string
-	for _, line := range strings.Split(string(output), "\n") {
-		if strings.Contains(line, launchdLabel) {
-			loaded = true
-			fields := strings.Fields(line)
-			if len(fields) >= 1 && fields[0] != "-" {
-				pid = fields[0]
-			}
-			break
-		}
+		return err
 	}
 
 	if !loaded {
 		fmt.Println("✗ NOT LOADED")
-		fmt.Println("  Run: launchctl load " + plistPath)
+		fmt.Printf("  Run: launchctl bootstrap %s %s\n", launchdDomain(), plistPath)
 		return nil
 	}
 	fmt.Println("✓")
 
 	// Check if running
 	fmt.Print("Daemon running................ ")
+	pid := launchdPID(output)
 	if pid != "" && pid != "0" {
 		fmt.Printf("✓ (PID %s)\n", pid)
 	} else {
@@ -1468,7 +1572,7 @@ func wrapConnError(err error) error {
 	if strings.Contains(errStr, "connection refused") ||
 		strings.Contains(errStr, "no such host") ||
 		strings.Contains(errStr, "dial tcp") {
-		return fmt.Errorf("%w\n\nHint: Is the daemon running? Start it with:\n  tinyserved\n\nOr check status with:\n  launchctl list | grep tinyserve", err)
+		return fmt.Errorf("%w\n\nHint: Is the daemon running? Start it with:\n  tinyserved\n\nOr check status with:\n  tinyserve launchd status", err)
 	}
 	return err
 }

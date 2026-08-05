@@ -94,7 +94,7 @@ Edit the plist to update the binary path in `ProgramArguments`.
 ### 3. Load the LaunchAgent
 
 ```bash
-launchctl load ~/Library/LaunchAgents/dev.tinyserve.daemon.plist
+launchctl bootstrap "gui/$(id -u)" "$HOME/Library/LaunchAgents/dev.tinyserve.daemon.plist"
 ```
 
 ## launchctl Commands
@@ -102,14 +102,17 @@ launchctl load ~/Library/LaunchAgents/dev.tinyserve.daemon.plist
 For manual control beyond the CLI:
 
 ```bash
-# Stop daemon (will auto-restart due to KeepAlive)
-launchctl stop dev.tinyserve.daemon
+# Restart the daemon
+launchctl kickstart -k "gui/$(id -u)/dev.tinyserve.daemon"
 
-# Start daemon
-launchctl start dev.tinyserve.daemon
+# Unload the daemon
+launchctl bootout "gui/$(id -u)/dev.tinyserve.daemon"
+
+# Load the daemon again
+launchctl bootstrap "gui/$(id -u)" "$HOME/Library/LaunchAgents/dev.tinyserve.daemon.plist"
 
 # Check detailed status
-launchctl list dev.tinyserve.daemon
+launchctl print "gui/$(id -u)/dev.tinyserve.daemon"
 ```
 
 ## Troubleshooting
@@ -151,6 +154,16 @@ Ensure the binary is executable:
 chmod +x /opt/homebrew/bin/tinyserved
 ```
 
+### `launchctl load: exit status 134`
+
+The legacy `launchctl load` command can abort when it cannot infer a logged-in GUI domain, especially when run over SSH. Sign in to the macOS desktop, then rerun `tinyserve launchd install`. Current versions of tinyserve target the GUI domain explicitly.
+
+For a manual install, use:
+
+```bash
+launchctl bootstrap "gui/$(id -u)" "$HOME/Library/LaunchAgents/dev.tinyserve.daemon.plist"
+```
+
 ### Check launchd errors
 
 ```bash
@@ -174,10 +187,10 @@ log show --predicate 'subsystem == "com.apple.xpc.launchd"' --last 5m | grep tin
 
 If tinyserve fails to start after a deploy or config change:
 
-1. Stop the daemon: `launchctl stop dev.tinyserve.daemon`
+1. Unload the daemon: `launchctl bootout "gui/$(id -u)/dev.tinyserve.daemon"`
 2. Check generated configs: `ls ~/Library/Application\ Support/tinyserve/generated/`
 3. Rollback if needed: `tinyserve rollback`
-4. Start the daemon: `launchctl start dev.tinyserve.daemon`
+4. Load the daemon: `launchctl bootstrap "gui/$(id -u)" "$HOME/Library/LaunchAgents/dev.tinyserve.daemon.plist"`
 
 For Docker Compose issues:
 
@@ -191,7 +204,7 @@ docker compose logs
 
 ```bash
 # Stop and unload
-launchctl unload ~/Library/LaunchAgents/dev.tinyserve.daemon.plist
+launchctl bootout "gui/$(id -u)/dev.tinyserve.daemon"
 
 # Remove plist
 rm ~/Library/LaunchAgents/dev.tinyserve.daemon.plist

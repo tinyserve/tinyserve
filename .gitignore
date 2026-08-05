@@ -7,8 +7,9 @@ dist/
 tinyserve
 tinyserved
 # The broad binary ignore pattern hides new files under cmd/tinyserve.
-# Keep backup.go visible without exposing existing ignored scratch files there.
+# Keep intentional source additions visible without exposing existing scratch files there.
 !cmd/
 !cmd/tinyserve/
 cmd/tinyserve/*
 !cmd/tinyserve/backup.go
+!cmd/tinyserve/launchd_test.go

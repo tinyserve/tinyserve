@@ -164,7 +164,7 @@ echo "==> Creating full backup: ${TIMESTAMP}"
 
 # 1. Stop daemon to ensure clean SQLite state
 echo "Stopping tinyserved..."
-launchctl unload ~/Library/LaunchAgents/dev.tinyserve.daemon.plist 2>/dev/null || true
+launchctl bootout "gui/$(id -u)/dev.tinyserve.daemon" 2>/dev/null || true
 sleep 2
 
 # 2. Copy SQLite database (with WAL checkpoint)
@@ -216,7 +216,7 @@ aws s3 cp "${WORK_DIR}/" "s3://${BACKUP_BUCKET}/${BACKUP_PATH}/" \
 
 # 8. Restart daemon
 echo "Restarting tinyserved..."
-launchctl load ~/Library/LaunchAgents/dev.tinyserve.daemon.plist
+launchctl bootstrap "gui/$(id -u)" "$HOME/Library/LaunchAgents/dev.tinyserve.daemon.plist"
 
 echo "==> Full backup complete: s3://${BACKUP_BUCKET}/${BACKUP_PATH}/"
 ```
@@ -374,7 +374,7 @@ Create `~/Library/LaunchAgents/dev.tinyserve.backup.plist`:
 
 Load with:
 ```bash
-launchctl load ~/Library/LaunchAgents/dev.tinyserve.backup.plist
+launchctl bootstrap "gui/$(id -u)" "$HOME/Library/LaunchAgents/dev.tinyserve.backup.plist"
 ```
 
 ## Restore Procedures
@@ -419,7 +419,7 @@ echo "==> Restoring from s3://${BACKUP_BUCKET}/${BACKUP_PATH}/"
 
 # 1. Stop daemon
 echo "Stopping tinyserved..."
-launchctl unload ~/Library/LaunchAgents/dev.tinyserve.daemon.plist 2>/dev/null || true
+launchctl bootout "gui/$(id -u)/dev.tinyserve.daemon" 2>/dev/null || true
 sleep 2
 
 # 2. Download backup
@@ -464,7 +464,7 @@ fi
 
 # 9. Restart daemon
 echo "Starting tinyserved..."
-launchctl load ~/Library/LaunchAgents/dev.tinyserve.daemon.plist
+launchctl bootstrap "gui/$(id -u)" "$HOME/Library/LaunchAgents/dev.tinyserve.daemon.plist"
 
 # 10. Verify
 sleep 3
@@ -490,14 +490,14 @@ For recovering to a specific point using shipped WAL files:
 ./tinyserve-restore.sh 2026-01-10T00-00-00Z partial
 
 # 2. Stop daemon
-launchctl unload ~/Library/LaunchAgents/dev.tinyserve.daemon.plist
+launchctl bootout "gui/$(id -u)/dev.tinyserve.daemon"
 
 # 3. Download and apply WAL files in order
 aws s3 cp "s3://${BUCKET}/tinyserve-backups/wal/state.db-wal-2026-01-10T00-05-00Z" \
     "~/Library/Application Support/tinyserve/state.db-wal"
 
 # 4. Let SQLite replay the WAL on next open
-launchctl load ~/Library/LaunchAgents/dev.tinyserve.daemon.plist
+launchctl bootstrap "gui/$(id -u)" "$HOME/Library/LaunchAgents/dev.tinyserve.daemon.plist"
 ```
 
 ## Backup Retention
